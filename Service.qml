@@ -42,7 +42,7 @@ Item {
 
   function refreshStatus() {
     if (statusProcess.running) return
-    statusProcess.command = ["fish", root.pluginDir + "/scripts/status.fish"]
+    statusProcess.command = ["fish", "--no-config", root.pluginDir + "/scripts/status.fish"]
     statusProcess.running = true
   }
 
@@ -57,13 +57,13 @@ Item {
     lastReply = ""
     messages = HermesModel.appendMessage(messages, "user", prompt)
     busy = true
-    sendProcess.command = ["fish", root.pluginDir + "/scripts/send.fish", root.sessionName, prompt]
+    sendProcess.command = ["fish", "--no-config", root.pluginDir + "/scripts/send.fish", root.sessionName, prompt]
     sendProcess.running = true
     return true
   }
 
   function launchDesktop() {
-    Quickshell.execDetached(["fish", root.pluginDir + "/scripts/desktop.fish"])
+    Quickshell.execDetached(["fish", "--no-config", root.pluginDir + "/scripts/desktop.fish"])
   }
 
   function requestFocus() {
@@ -151,4 +151,6 @@ Item {
       root.finishSend(exitCode, sendOut.text, sendErr.text)
     }
   }
+
+  Component.onCompleted: root.refreshStatus()
 }

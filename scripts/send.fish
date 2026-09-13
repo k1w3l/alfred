@@ -1,5 +1,7 @@
 #!/usr/bin/env fish
 
+set -gx PATH $HOME/.local/bin $HOME/.hermes/hermes-agent/venv/bin $PATH
+
 set -l hermes hermes
 if not command -q hermes
   set hermes $HOME/.hermes/hermes-agent/venv/bin/hermes
