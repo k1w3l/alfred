@@ -33,6 +33,10 @@ Item {
   readonly property int pillWidth: Style.space(720)
   readonly property int pillHeight: Math.max(Style.space(48), Style.font.body + Style.spacing.controlPaddingY * 2 + Style.space(16))
   readonly property int bandMaxHeight: Style.space(280)
+  readonly property var activeScreen: {
+    var _monitor = Hyprland.focusedMonitor
+    return root.focusedScreen()
+  }
 
   function focusedScreen() {
     var mon = Hyprland.focusedMonitor
@@ -67,7 +71,6 @@ Item {
     root.opened = true
     root.focused = true
     root.bumpRecent()
-    panel.screen = root.focusedScreen()
     Qt.callLater(function() { composerInput.forceActiveFocus() })
   }
 
@@ -137,6 +140,7 @@ Item {
   PanelWindow {
     id: panel
     visible: root.opened
+    screen: root.activeScreen
     anchors { top: true; bottom: true; left: true; right: true }
     color: "transparent"
     WlrLayershell.namespace: "kiwel-hermes-hud"
@@ -340,7 +344,6 @@ Item {
   }
 
   Component.onCompleted: {
-    panel.screen = root.focusedScreen()
     if (hermes && typeof hermes.refreshStatus === "function") hermes.refreshStatus()
   }
 }
