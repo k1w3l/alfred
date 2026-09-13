@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "id": "kiwel.hermes-hud",
+  "name": "Hermes HUD",
+  "version": "1.0.0",
+  "author": "kiwel",
+  "license": "MIT",
+  "homepage": "https://github.com/k1w3l/alfred",
+  "description": "Always-on Spotlight-style HUD for Hermes on Omarchy. Quick commands stay in the shell; Hermes Desktop remains one shortcut away.",
+  "kinds": ["service", "panel", "bar-widget"],
+  "keepLoaded": true,
+  "entryPoints": {
+    "service": "Service.qml",
+    "panel": "Hud.qml",
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Hermes HUD",
+    "description": "Gateway status and a native HUD composer. Left-click focuses the HUD, right-click opens Hermes Desktop.",
+    "category": "AI",
+    "defaultSection": "right",
+    "allowMultiple": false,
+    "aliases": ["hermes", "hud", "alfred", "jarvis"],
+    "defaults": {
+      "sessionName": "hud"
+    },
+    "schema": [
+      {
+        "key": "sessionName",
+        "type": "string",
+        "label": "Hermes session name",
+        "description": "Named Hermes chat the HUD continues (-c). Created on first send if missing.",
+        "defaultValue": "hud"
+      }
+    ]
+  }
+}
