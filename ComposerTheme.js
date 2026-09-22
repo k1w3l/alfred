@@ -62,7 +62,12 @@ function glyph(name) {
     "error": "\uEA87",
     "pass": "\uEBA4",
     "key": "\uEB11",
-    "shield": "\uEB53"
+    "shield": "\uEB53",
+    "lightbulb": "\uEA61",
+    "plug": "\uEB55",
+    "server": "\uEA99",
+    "account": "\uEB99",
+    "person": "\uEA67"
   }
   return map[String(name || "")] || ""
 }

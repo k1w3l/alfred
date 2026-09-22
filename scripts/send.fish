@@ -54,6 +54,14 @@ if test (count $argv) -ge 2
   set prompt (string join " " -- $argv[2..-1])
 end
 
+# Optional trailing file paths after a -- separator are not used; Service passes
+# files as trailing argv. Reconstruct: session, prompt, then files.
+# When called as: send.fish SESSION PROMPT [files...]
+# the prompt is argv[2] only (single arg). Keep that contract.
+if test (count $argv) -ge 2
+  set prompt $argv[2]
+end
+
 if test -z "$prompt"; and not isatty stdin
   set prompt (cat)
 end
@@ -87,8 +95,59 @@ if test -z "$prompt"
   exit 2
 end
 
+set -l reasoning ""
+if set -q ALFRED_REASONING; and test -n "$ALFRED_REASONING"
+  set reasoning $ALFRED_REASONING
+else
+  set reasoning (python3 -c '
+import json, os
+from pathlib import Path
+p = Path(os.path.expanduser("~/.config/Hermes/alfred.json"))
+try:
+    d = json.loads(p.read_text())
+    print(str(d.get("reasoningEffort") or "").strip())
+except Exception:
+    print("")
+' 2>/dev/null)
+end
+if test -z "$reasoning"
+  set reasoning ($hermes config get agent.reasoning_effort 2>/dev/null | string trim -c '"' | string trim)
+end
+
+set -l script_dir (dirname (status filename))
+set -l gw (python3 $script_dir/gateways.py get 2>/dev/null)
+set -l kind local
+set -l url ""
+set -l conn_id local
+if test -n "$gw"
+  set kind (printf '%s' $gw | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("kind") or "local")' 2>/dev/null)
+  set url (printf '%s' $gw | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("url") or "")' 2>/dev/null)
+  set conn_id (printf '%s' $gw | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("current") or "local")' 2>/dev/null)
+end
+
+if test "$kind" != local; and test -n "$url"
+  set -l py $HOME/.hermes/hermes-agent/venv/bin/python
+  if not test -x "$py"
+    set py python3
+  end
+  cd $HOME
+  set -l profile_name (python3 $script_dir/alfred-profile.py name 2>/dev/null)
+  exec $py $script_dir/remote-send.py "$url" "$conn_id" "$session" "$prompt" "$reasoning" "$profile_name"
+end
+
+set -l reasoning_args
+if test -n "$reasoning"
+  set reasoning_args --reasoning $reasoning
+end
+
 cd $HOME
-exec $hermes chat -Q --oneshot --accept-hooks \
+set -l profile_args
+set -l profile_name (python3 $script_dir/alfred-profile.py name 2>/dev/null)
+if test -n "$profile_name"; and test "$profile_name" != default
+  set profile_args -p $profile_name
+end
+exec $hermes $profile_args chat -Q --oneshot --accept-hooks \
   -c "$session" --create-if-missing \
   --source alfred \
+  $reasoning_args \
   -q "$prompt"

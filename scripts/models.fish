@@ -29,6 +29,13 @@ if test -z "$hermes"
   exit 127
 end
 
+set -l script_dir (dirname (status filename))
+set -l profile_args
+set -l profile_name (python3 $script_dir/alfred-profile.py name 2>/dev/null)
+if test -n "$profile_name"; and test "$profile_name" != default
+  set profile_args -p $profile_name
+end
+
 set -l mode $argv[1]
 if test -z "$mode"
   set mode list
@@ -40,14 +47,19 @@ if test "$mode" = set
     echo "{\"ok\":false,\"error\":\"missing model\"}"
     exit 2
   end
-  $hermes config set model.default $name >/dev/null
-  and $hermes config get model --json
+  $hermes $profile_args config set model.default $name >/dev/null
+  and $hermes $profile_args config get model --json
   exit $status
 end
 
-set -l current ($hermes config get model --json 2>/dev/null)
+set -l current ($hermes $profile_args config get model --json 2>/dev/null)
 if test -z "$current"
   set current "{}"
+end
+
+set -l cache_home (python3 $script_dir/alfred-profile.py home 2>/dev/null)
+if test -z "$cache_home"
+  set cache_home $HOME/.hermes
 end
 
 printf '%s' $current | python3 -c '
@@ -55,7 +67,7 @@ import json, os, sys
 current = json.loads(sys.stdin.read() or "{}")
 provider = str(current.get("provider") or "")
 name = str(current.get("default") or current.get("model") or "")
-cache_path = os.path.expanduser("~/.hermes/provider_models_cache.json")
+cache_path = os.path.join(sys.argv[1], "provider_models_cache.json")
 models = []
 try:
     cache = json.load(open(cache_path))
@@ -71,4 +83,4 @@ except Exception:
 if name and name not in models:
     models.insert(0, name)
 print(json.dumps({"ok": True, "provider": provider, "current": name, "models": models}))
-'
+' "$cache_home"

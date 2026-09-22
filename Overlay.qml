@@ -33,6 +33,14 @@ Item {
   readonly property string lastOutcome: alfred ? String(alfred.lastOutcome || "") : ""
   readonly property string modelName: alfred ? String(alfred.modelName || "") : ""
   readonly property var modelOptions: alfred && alfred.modelOptions ? alfred.modelOptions : []
+  readonly property string reasoningEffort: alfred ? String(alfred.reasoningEffort || "medium") : "medium"
+  readonly property var effortOptions: alfred && alfred.effortOptions ? alfred.effortOptions : ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]
+  readonly property string gatewayLabel: alfred ? String(alfred.gatewayLabel || "This device") : "This device"
+  readonly property string gatewayConnectionId: alfred ? String(alfred.gatewayConnectionId || "local") : "local"
+  readonly property var gatewayOptions: alfred && alfred.gatewayOptions ? alfred.gatewayOptions : []
+  readonly property string profileLabel: alfred ? String(alfred.profileLabel || "default") : "default"
+  readonly property string profileName: alfred ? String(alfred.profileName || "default") : "default"
+  readonly property var profileOptions: alfred && alfred.profileOptions ? alfred.profileOptions : []
   property string menuKind: ""
   property string pickerMode: ""
   readonly property bool menuOpen: root.menuKind !== ""
@@ -308,6 +316,35 @@ Item {
           checked: String(root.modelOptions[i]) === root.modelName
         })
       }
+    } else if (root.menuKind === "effort") {
+      for (i = 0; i < root.effortOptions.length; i++) {
+        rows.push({
+          id: String(root.effortOptions[i]),
+          icon: "",
+          label: AlfredModel.effortLabel(root.effortOptions[i]),
+          checked: String(root.effortOptions[i]) === root.reasoningEffort
+        })
+      }
+    } else if (root.menuKind === "gateway") {
+      for (i = 0; i < root.gatewayOptions.length; i++) {
+        var gw = root.gatewayOptions[i]
+        rows.push({
+          id: String(gw.id || ""),
+          icon: String(gw.kind) === "local" ? "server" : "plug",
+          label: String(gw.label || gw.id || ""),
+          checked: String(gw.id || "") === root.gatewayConnectionId
+        })
+      }
+    } else if (root.menuKind === "profile") {
+      for (i = 0; i < root.profileOptions.length; i++) {
+        var pf = root.profileOptions[i]
+        rows.push({
+          id: String(pf.id || ""),
+          icon: "account",
+          label: String(pf.label || pf.id || ""),
+          checked: String(pf.id || "") === root.profileName
+        })
+      }
     }
     root.menuRows = rows
   }
@@ -321,6 +358,12 @@ Item {
     }
     if (root.menuKind === "model" && alfred && typeof alfred.refreshModels === "function")
       alfred.refreshModels()
+    if (root.menuKind === "effort" && alfred && typeof alfred.refreshEffort === "function")
+      alfred.refreshEffort()
+    if (root.menuKind === "gateway" && alfred && typeof alfred.refreshGateways === "function")
+      alfred.refreshGateways()
+    if (root.menuKind === "profile" && alfred && typeof alfred.refreshProfiles === "function")
+      alfred.refreshProfiles()
     root.rebuildMenu()
   }
 
@@ -330,11 +373,14 @@ Item {
       root.pickKind(id)
       return
     }
-            if (root.menuKind === "voice") {
+    if (root.menuKind === "voice") {
       if (id === "conversation" || id === "dictate") root.startListen()
       return
     }
     if (root.menuKind === "model") root.chooseModel(id)
+    if (root.menuKind === "effort") root.chooseEffort(id)
+    if (root.menuKind === "gateway") root.chooseGateway(id)
+    if (root.menuKind === "profile") root.chooseProfile(id)
   }
 
   function copyText(value) {
@@ -363,6 +409,21 @@ Item {
   function chooseModel(name) {
     root.closeMenus()
     if (alfred && typeof alfred.setModel === "function") alfred.setModel(name)
+  }
+
+  function chooseEffort(level) {
+    root.closeMenus()
+    if (alfred && typeof alfred.setEffort === "function") alfred.setEffort(level)
+  }
+
+  function chooseGateway(id) {
+    root.closeMenus()
+    if (alfred && typeof alfred.setGateway === "function") alfred.setGateway(id)
+  }
+
+  function chooseProfile(id) {
+    root.closeMenus()
+    if (alfred && typeof alfred.setProfile === "function") alfred.setProfile(id)
   }
 
   function startListen() {
@@ -474,6 +535,30 @@ Item {
 
   onModelNameChanged: {
     if (root.menuKind === "model") root.rebuildMenu()
+  }
+
+  onEffortOptionsChanged: {
+    if (root.menuKind === "effort") root.rebuildMenu()
+  }
+
+  onReasoningEffortChanged: {
+    if (root.menuKind === "effort") root.rebuildMenu()
+  }
+
+  onGatewayOptionsChanged: {
+    if (root.menuKind === "gateway") root.rebuildMenu()
+  }
+
+  onGatewayConnectionIdChanged: {
+    if (root.menuKind === "gateway") root.rebuildMenu()
+  }
+
+  onProfileOptionsChanged: {
+    if (root.menuKind === "profile") root.rebuildMenu()
+  }
+
+  onProfileNameChanged: {
+    if (root.menuKind === "profile") root.rebuildMenu()
   }
 
   onAwaitingPermissionChanged: {
@@ -751,6 +836,39 @@ Item {
           }
 
           HudButton {
+            wide: true
+            compact: root.pillWidth < Style.space(640)
+            icon: root.pillWidth < Style.space(640) ? "lightbulb" : ""
+            trailingIcon: root.pillWidth < Style.space(640) ? "" : "chevron-down"
+            label: AlfredModel.effortLabel(root.reasoningEffort)
+            opened: root.menuKind === "effort"
+            tooltipText: "Reasoning effort: " + AlfredModel.effortLabel(root.reasoningEffort)
+            onClicked: root.toggleMenu("effort")
+          }
+
+          HudButton {
+            wide: true
+            compact: root.pillWidth < Style.space(700)
+            icon: "account"
+            trailingIcon: root.pillWidth < Style.space(700) ? "" : "chevron-down"
+            label: root.pillWidth < Style.space(700) ? "" : root.profileLabel
+            opened: root.menuKind === "profile"
+            tooltipText: "Profile: " + root.profileLabel
+            onClicked: root.toggleMenu("profile")
+          }
+
+          HudButton {
+            wide: true
+            compact: root.pillWidth < Style.space(780)
+            icon: root.gatewayConnectionId === "local" || root.gatewayLabel === "This device" ? "server" : "plug"
+            trailingIcon: root.pillWidth < Style.space(780) ? "" : "chevron-down"
+            label: root.pillWidth < Style.space(780) ? "" : root.gatewayLabel
+            opened: root.menuKind === "gateway"
+            tooltipText: "Gateway: " + root.gatewayLabel
+            onClicked: root.toggleMenu("gateway")
+          }
+
+          HudButton {
             icon: root.listening ? "stop" : "mic"
             active: root.listening
             tooltipText: root.listening ? "Stop dictation" : "Dictate"
@@ -804,11 +922,19 @@ Item {
             Text {
               width: parent.width
               textFormat: Text.PlainText
-              text: root.menuKind === "attach" ? "ATTACH" : (root.modelOptions.length === 0 ? "No cached models" : "Model")
+              text: root.menuKind === "attach"
+                ? "ATTACH"
+                : (root.menuKind === "effort"
+                  ? "REASONING"
+                  : (root.menuKind === "gateway"
+                    ? "GATEWAY"
+                    : (root.menuKind === "profile"
+                      ? "PROFILE"
+                      : (root.modelOptions.length === 0 ? "No cached models" : "Model"))))
               color: root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
-              font.bold: root.menuKind === "attach"
+              font.bold: root.menuKind === "attach" || root.menuKind === "effort" || root.menuKind === "gateway" || root.menuKind === "profile"
             }
 
             Repeater {
@@ -899,6 +1025,187 @@ Item {
                     mouse.accepted = true
                     var name = String(modelData)
                     Qt.callLater(function() { root.chooseModel(name) })
+                  }
+                }
+              }
+            }
+
+            Repeater {
+              model: root.menuKind === "effort" ? root.effortOptions : 0
+
+              Rectangle {
+                required property var modelData
+                width: menuCol.width
+                height: Style.space(28)
+                radius: Style.space(6)
+                color: String(modelData) === root.reasoningEffort
+                  ? Util.alpha(Color.accent, 0.18)
+                  : (effortHit.containsMouse ? Util.alpha(Color.foreground, 0.08) : "transparent")
+
+                Text {
+                  anchors.verticalCenter: parent.verticalCenter
+                  anchors.left: parent.left
+                  anchors.leftMargin: Style.space(8)
+                  anchors.right: parent.right
+                  anchors.rightMargin: Style.space(8)
+                  textFormat: Text.PlainText
+                  text: AlfredModel.effortLabel(modelData)
+                  elide: Text.ElideRight
+                  color: String(modelData) === root.reasoningEffort ? Color.accent : root.foreground
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                }
+
+                MouseArea {
+                  id: effortHit
+                  anchors.fill: parent
+                  hoverEnabled: true
+                  cursorShape: Qt.PointingHandCursor
+                  preventStealing: true
+                  onPressed: function(mouse) {
+                    mouse.accepted = true
+                    var level = String(modelData)
+                    Qt.callLater(function() { root.chooseEffort(level) })
+                  }
+                }
+              }
+            }
+
+            Repeater {
+              model: root.menuKind === "gateway" ? root.gatewayOptions : 0
+
+              Rectangle {
+                required property var modelData
+                width: menuCol.width
+                height: Style.space(30)
+                radius: Style.space(6)
+                color: String(modelData.id) === root.gatewayConnectionId
+                  ? Util.alpha(Color.accent, 0.18)
+                  : (gatewayHit.containsMouse ? Util.alpha(Color.foreground, 0.08) : "transparent")
+
+                Row {
+                  anchors.fill: parent
+                  anchors.leftMargin: Style.space(8)
+                  anchors.rightMargin: Style.space(8)
+                  spacing: Style.space(8)
+
+                  Text {
+                    textFormat: Text.PlainText
+                    text: Theme.glyph(String(modelData.kind) === "local" ? "server" : "plug")
+                    color: root.dim
+                    font.family: menuCodicon.name !== "" ? menuCodicon.name : "codicon"
+                    font.pixelSize: Style.space(Theme.iconPx())
+                    anchors.verticalCenter: parent.verticalCenter
+                  }
+
+                  Column {
+                    anchors.verticalCenter: parent.verticalCenter
+                    spacing: 0
+                    width: parent.width - Style.space(28)
+
+                    Text {
+                      width: parent.width
+                      textFormat: Text.PlainText
+                      text: String(modelData.label || modelData.id || "")
+                      elide: Text.ElideRight
+                      color: String(modelData.id) === root.gatewayConnectionId ? Color.accent : root.foreground
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.caption
+                    }
+
+                    Text {
+                      width: parent.width
+                      visible: String(modelData.kind || "") !== "local" && String(modelData.url || "") !== ""
+                      textFormat: Text.PlainText
+                      text: String(modelData.url || "")
+                      elide: Text.ElideMiddle
+                      color: root.dim
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.caption
+                    }
+                  }
+                }
+
+                MouseArea {
+                  id: gatewayHit
+                  anchors.fill: parent
+                  hoverEnabled: true
+                  cursorShape: Qt.PointingHandCursor
+                  preventStealing: true
+                  onPressed: function(mouse) {
+                    mouse.accepted = true
+                    var id = String(modelData.id || "")
+                    Qt.callLater(function() { root.chooseGateway(id) })
+                  }
+                }
+              }
+            }
+
+            Repeater {
+              model: root.menuKind === "profile" ? root.profileOptions : 0
+
+              Rectangle {
+                required property var modelData
+                width: menuCol.width
+                height: Style.space(34)
+                radius: Style.space(6)
+                color: String(modelData.id) === root.profileName
+                  ? Util.alpha(Color.accent, 0.18)
+                  : (profileHit.containsMouse ? Util.alpha(Color.foreground, 0.08) : "transparent")
+
+                Row {
+                  anchors.fill: parent
+                  anchors.leftMargin: Style.space(8)
+                  anchors.rightMargin: Style.space(8)
+                  spacing: Style.space(8)
+
+                  Text {
+                    textFormat: Text.PlainText
+                    text: Theme.glyph("account")
+                    color: root.dim
+                    font.family: menuCodicon.name !== "" ? menuCodicon.name : "codicon"
+                    font.pixelSize: Style.space(Theme.iconPx())
+                    anchors.verticalCenter: parent.verticalCenter
+                  }
+
+                  Column {
+                    anchors.verticalCenter: parent.verticalCenter
+                    spacing: 0
+                    width: parent.width - Style.space(28)
+
+                    Text {
+                      width: parent.width
+                      textFormat: Text.PlainText
+                      text: String(modelData.label || modelData.id || "")
+                      elide: Text.ElideRight
+                      color: String(modelData.id) === root.profileName ? Color.accent : root.foreground
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.caption
+                    }
+
+                    Text {
+                      width: parent.width
+                      visible: String(modelData.model || "") !== ""
+                      textFormat: Text.PlainText
+                      text: String(modelData.model || "")
+                      elide: Text.ElideRight
+                      color: root.dim
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.caption
+                    }
+                  }
+                }
+
+                MouseArea {
+                  id: profileHit
+                  anchors.fill: parent
+                  hoverEnabled: true
+                  cursorShape: Qt.PointingHandCursor
+                  preventStealing: true
+                  onPressed: function(mouse) {
+                    mouse.accepted = true
+                    var id = String(modelData.id || "")
+                    Qt.callLater(function() { root.chooseProfile(id) })
                   }
                 }
               }

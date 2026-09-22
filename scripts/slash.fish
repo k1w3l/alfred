@@ -5,7 +5,6 @@
 # stdout: JSON {ok, items:[{text,display,meta,group,kind}], query}
 
 set -gx PATH /usr/bin /usr/local/bin $HOME/.local/bin $PATH
-set -gx HERMES_HOME $HOME/.hermes
 set -gx VIRTUAL_ENV $HOME/.hermes/hermes-agent/venv
 set -gx PYTHONPATH $HOME/.hermes/hermes-agent
 
@@ -21,5 +20,11 @@ if test -z "$text"
     set text /
 end
 
-cd $HOME/.hermes
+set -l home (python3 $dir/alfred-profile.py home 2>/dev/null)
+if test -z "$home"
+    set home $HOME/.hermes
+end
+set -gx HERMES_HOME $home
+
+cd $home
 exec $py $dir/slash.py $text

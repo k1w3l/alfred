@@ -42,6 +42,16 @@ Item {
   property string modelName: ""
   property string modelProvider: ""
   property var modelOptions: []
+  property string reasoningEffort: "medium"
+  property var effortOptions: ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]
+  property string gatewayConnectionId: "local"
+  property string gatewayLabel: "This device"
+  property string gatewayKind: "local"
+  property string gatewayUrl: ""
+  property var gatewayOptions: []
+  property string profileName: "default"
+  property string profileLabel: "default"
+  property var profileOptions: []
   property bool pickingFiles: false
   property bool aborting: false
   property bool transcribing: false
@@ -188,6 +198,94 @@ Item {
     if (parsed.provider !== "") modelProvider = parsed.provider
     if (parsed.current !== "") modelName = parsed.current
     if (parsed.models.length > 0) modelOptions = parsed.models
+  }
+
+  function refreshEffort() {
+    if (effortProcess.running) return
+    effortProcess.command = ["fish", "--no-config", root.pluginDir + "/scripts/effort.fish", "list"]
+    effortProcess.running = true
+  }
+
+  function setEffort(level) {
+    var value = String(level || "").trim().toLowerCase()
+    if (value === "" || setEffortProcess.running) return false
+    reasoningEffort = value
+    setEffortProcess.command = ["fish", "--no-config", root.pluginDir + "/scripts/effort.fish", "set", value]
+    setEffortProcess.running = true
+    return true
+  }
+
+  function applyEffort(raw) {
+    var parsed = AlfredModel.parseEffort(raw)
+    if (parsed.current !== "") reasoningEffort = parsed.current
+    if (parsed.options.length > 0) effortOptions = parsed.options
+  }
+
+  function refreshGateways() {
+    if (gatewaysProcess.running) return
+    gatewaysProcess.command = ["fish", "--no-config", root.pluginDir + "/scripts/gateways.fish", "list"]
+    gatewaysProcess.running = true
+  }
+
+  function setGateway(id) {
+    var value = String(id || "").trim()
+    if (value === "" || setGatewayProcess.running) return false
+    gatewayConnectionId = value
+    setGatewayProcess.command = ["fish", "--no-config", root.pluginDir + "/scripts/gateways.fish", "set", value]
+    setGatewayProcess.running = true
+    return true
+  }
+
+  function applyGateways(raw) {
+    var parsed = AlfredModel.parseGateways(raw)
+    if (parsed.current !== "") gatewayConnectionId = parsed.current
+    if (parsed.label !== "") gatewayLabel = parsed.label
+    if (parsed.kind !== "") gatewayKind = parsed.kind
+    gatewayUrl = parsed.url || ""
+    if (parsed.connections.length > 0) gatewayOptions = parsed.connections
+    var i
+    for (i = 0; i < parsed.connections.length; i++) {
+      if (String(parsed.connections[i].id) === gatewayConnectionId) {
+        if (parsed.kind === "local" || String(parsed.connections[i].kind) === "local")
+          gatewayActive = parsed.connections[i].gateway_running === true
+        else
+          gatewayActive = parsed.connections[i].reachable === true && parsed.connections[i].gateway_running === true
+        break
+      }
+    }
+  }
+
+  function refreshProfiles() {
+    if (profilesProcess.running) return
+    profilesProcess.command = ["fish", "--no-config", root.pluginDir + "/scripts/profiles.fish", "list"]
+    profilesProcess.running = true
+  }
+
+  function setProfile(id) {
+    var value = String(id || "").trim()
+    if (value === "" || setProfileProcess.running) return false
+    profileName = value
+    setProfileProcess.command = ["fish", "--no-config", root.pluginDir + "/scripts/profiles.fish", "set", value]
+    setProfileProcess.running = true
+    return true
+  }
+
+  function applyProfiles(raw) {
+    var parsed = AlfredModel.parseProfiles(raw)
+    if (parsed.current !== "") profileName = parsed.current
+    if (parsed.label !== "") profileLabel = parsed.label
+    if (parsed.profiles.length > 0) profileOptions = parsed.profiles
+    if (parsed.model !== "") modelName = parsed.model
+    if (parsed.provider !== "") modelProvider = parsed.provider
+  }
+
+  function afterProfileChange() {
+    slashCatalog = []
+    slashItems = []
+    root.refreshModels()
+    root.refreshEffort()
+    root.refreshStatus()
+    root.prefetchSlash()
   }
 
   function toggleVoice() {
@@ -596,6 +694,86 @@ Item {
   }
 
   Process {
+    id: effortProcess
+    running: false
+    stdout: StdioCollector {
+      id: effortOut
+      waitForEnd: true
+    }
+    stderr: StdioCollector { waitForEnd: true }
+    onExited: function() {
+      root.applyEffort(effortOut.text)
+    }
+  }
+
+  Process {
+    id: setEffortProcess
+    running: false
+    stdout: StdioCollector {
+      id: setEffortOut
+      waitForEnd: true
+    }
+    stderr: StdioCollector { waitForEnd: true }
+    onExited: function() {
+      root.applyEffort(setEffortOut.text)
+    }
+  }
+
+  Process {
+    id: gatewaysProcess
+    running: false
+    stdout: StdioCollector {
+      id: gatewaysOut
+      waitForEnd: true
+    }
+    stderr: StdioCollector { waitForEnd: true }
+    onExited: function() {
+      root.applyGateways(gatewaysOut.text)
+    }
+  }
+
+  Process {
+    id: setGatewayProcess
+    running: false
+    stdout: StdioCollector {
+      id: setGatewayOut
+      waitForEnd: true
+    }
+    stderr: StdioCollector { waitForEnd: true }
+    onExited: function() {
+      root.applyGateways(setGatewayOut.text)
+      root.refreshStatus()
+    }
+  }
+
+  Process {
+    id: profilesProcess
+    running: false
+    stdout: StdioCollector {
+      id: profilesOut
+      waitForEnd: true
+    }
+    stderr: StdioCollector { waitForEnd: true }
+    onExited: function() {
+      root.applyProfiles(profilesOut.text)
+    }
+  }
+
+  Process {
+    id: setProfileProcess
+    running: false
+    stdout: StdioCollector {
+      id: setProfileOut
+      waitForEnd: true
+    }
+    stderr: StdioCollector { waitForEnd: true }
+    onExited: function() {
+      root.applyProfiles(setProfileOut.text)
+      root.afterProfileChange()
+    }
+  }
+
+  Process {
     id: voiceProcess
     running: false
     onExited: function() {
@@ -605,7 +783,10 @@ Item {
 
   Component.onCompleted: {
     root.refreshStatus()
+    root.refreshProfiles()
     root.refreshModels()
+    root.refreshEffort()
+    root.refreshGateways()
     root.prefetchSlash()
   }
 }

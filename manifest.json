@@ -2,11 +2,11 @@
   "schemaVersion": 1,
   "id": "kiwel.alfred",
   "name": "Alfred",
-  "version": "1.2.13",
+  "version": "1.3.1",
   "author": "kiwel",
   "license": "MIT",
   "homepage": "https://github.com/k1w3l/alfred",
-  "description": "Spotlight-style HUD for Alfred on Omarchy. Quick commands stay in the shell; Hermes Desktop remains one shortcut away.",
+  "description": "Spotlight-style HUD for Hermes Agent on Omarchy. Model, effort, profiles, and Desktop gateways in one pill.",
   "kinds": ["service", "overlay", "bar-widget"],
   "keepLoaded": true,
   "entryPoints": {

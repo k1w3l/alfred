@@ -107,6 +107,21 @@ function shortModelName(name) {
   return value
 }
 
+function effortLabel(level) {
+  var key = String(level || "").toLowerCase()
+  var map = {
+    none: "Off",
+    minimal: "Min",
+    low: "Low",
+    medium: "Med",
+    high: "High",
+    xhigh: "XHigh",
+    max: "Max",
+    ultra: "Ultra"
+  }
+  return map[key] || (key !== "" ? key : "Med")
+}
+
 function parseModels(raw) {
   var text = String(raw || "").trim()
   var empty = { ok: false, provider: "", current: "", models: [] }
@@ -129,6 +144,101 @@ function parseModels(raw) {
       provider: String(parsed.provider || ""),
       current: String(parsed.current || parsed.default || ""),
       models: list
+    }
+  } catch (e) {
+    return empty
+  }
+}
+
+function parseEffort(raw) {
+  var text = String(raw || "").trim()
+  var empty = { ok: false, current: "medium", options: ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"] }
+  if (text === "") return empty
+  try {
+    var parsed = JSON.parse(text)
+    if (!parsed || typeof parsed !== "object") return empty
+    var options = Array.isArray(parsed.options) ? parsed.options.map(function(v) { return String(v) }) : empty.options
+    return {
+      ok: parsed.ok !== false,
+      current: String(parsed.current || "medium").toLowerCase(),
+      options: options
+    }
+  } catch (e) {
+    return empty
+  }
+}
+
+function parseGateways(raw) {
+  var text = String(raw || "").trim()
+  var empty = { ok: false, current: "local", label: "This device", kind: "local", url: "", connections: [] }
+  if (text === "") return empty
+  try {
+    var parsed = JSON.parse(text)
+    if (!parsed || typeof parsed !== "object") return empty
+    var list = []
+    var rows = Array.isArray(parsed.connections) ? parsed.connections : []
+    var i
+    for (i = 0; i < rows.length; i++) {
+      var row = rows[i]
+      if (!row || typeof row !== "object") continue
+      var id = String(row.id || "").trim()
+      if (id === "") continue
+      list.push({
+        id: id,
+        label: String(row.label || id),
+        kind: String(row.kind || "local"),
+        url: String(row.url || ""),
+        selected: row.selected === true || id === String(parsed.current || ""),
+        reachable: row.reachable !== false,
+        gateway_running: row.gateway_running === true
+      })
+    }
+    return {
+      ok: parsed.ok !== false,
+      current: String(parsed.current || "local"),
+      label: String(parsed.label || parsed.current || "This device"),
+      kind: String(parsed.kind || "local"),
+      url: String(parsed.url || ""),
+      connections: list
+    }
+  } catch (e) {
+    return empty
+  }
+}
+
+function parseProfiles(raw) {
+  var text = String(raw || "").trim()
+  var empty = { ok: false, current: "default", label: "default", profiles: [] }
+  if (text === "") return empty
+  try {
+    var parsed = JSON.parse(text)
+    if (!parsed || typeof parsed !== "object") return empty
+    var list = []
+    var rows = Array.isArray(parsed.profiles) ? parsed.profiles : []
+    var i
+    for (i = 0; i < rows.length; i++) {
+      var row = rows[i]
+      if (!row || typeof row !== "object") continue
+      var id = String(row.id || "").trim()
+      if (id === "") continue
+      list.push({
+        id: id,
+        label: String(row.label || id),
+        model: String(row.model || ""),
+        provider: String(row.provider || ""),
+        description: String(row.description || ""),
+        isDefault: row.isDefault === true,
+        gatewayRunning: row.gatewayRunning === true,
+        selected: row.selected === true || id === String(parsed.current || "")
+      })
+    }
+    return {
+      ok: parsed.ok !== false,
+      current: String(parsed.current || "default"),
+      label: String(parsed.label || parsed.current || "default"),
+      model: String(parsed.model || ""),
+      provider: String(parsed.provider || ""),
+      profiles: list
     }
   } catch (e) {
     return empty
