@@ -35,7 +35,6 @@ Item {
   property var messages: []
   property var attachments: []
   property string lastReply: ""
-  property string pendingPrompt: ""
   property bool hudOpen: false
   property bool hudFocused: false
   property string voicePath: ""
@@ -53,7 +52,6 @@ Item {
   property string profileLabel: "default"
   property var profileOptions: []
   property bool pickingFiles: false
-  property bool aborting: false
   property bool transcribing: false
   property bool awaitingPermission: false
   property string lastOutcome: ""
@@ -62,8 +60,26 @@ Item {
   property string pickDonePath: ""
   property int pickExitCode: 1
   property string pickOutRaw: ""
-  property string sendOutBuf: ""
-  property string sendErrBuf: ""
+  property var chats: []
+  property string activeChatId: ""
+  property int chatSeq: 0
+  property int busyCount: 0
+  readonly property bool anyBusy: busyCount > 0
+  property var activity: []
+  property string liveText: ""
+  property real busyStartedAt: 0
+  // Per-chat stream buffers and Process handles; mutated in place, flushed into `chats` by flushTimer.
+  property var runtime: ({})
+  property var runners: ({})
+  property var sessionOptions: []
+  property bool sessionsLoading: false
+  property string sessionsError: ""
+  property string loadingSessionChat: ""
+  property var shortcutsGlobal: []
+  property var shortcutsLocal: []
+  property bool shortcutsHooked: false
+  property string shortcutsError: ""
+  property bool shortcutsSaving: false
   property var slashItems: []
   property var slashCatalog: []
   property string slashQuery: ""
@@ -77,6 +93,8 @@ Item {
   signal focusRequested()
   signal compactRequested()
   signal hideRequested()
+  signal voiceRequested()
+  signal menuRequested(string kind)
   signal replyReceived(string text)
   signal transcriptReady(string text)
 
@@ -86,29 +104,237 @@ Item {
     statusProcess.running = true
   }
 
+  function makeChat(sessionRef, title) {
+    root.chatSeq += 1
+    return {
+      id: "chat" + root.chatSeq,
+      title: String(title || "New chat"),
+      sessionRef: String(sessionRef || ""),
+      messages: [],
+      busy: false,
+      lastError: "",
+      lastOutcome: "",
+      lastReply: "",
+      awaitingPermission: false,
+      activity: [],
+      liveText: "",
+      startedAt: 0
+    }
+  }
+
+  function chatIndex(id) {
+    var want = String(id || "")
+    var i
+    for (i = 0; i < root.chats.length; i++) {
+      if (String(root.chats[i].id) === want) return i
+    }
+    return -1
+  }
+
+  function activeChat() {
+    var i = root.chatIndex(root.activeChatId)
+    return i >= 0 ? root.chats[i] : null
+  }
+
+  function ensureChat() {
+    if (root.chats.length > 0 && root.activeChat()) return
+    if (root.chats.length > 0) {
+      root.activeChatId = root.chats[0].id
+    } else {
+      var first = root.makeChat(root.sessionName, "Alfred")
+      root.chats = [first]
+      root.activeChatId = first.id
+    }
+    root.syncActive()
+  }
+
+  function patchChat(id, patch) {
+    var idx = root.chatIndex(id)
+    if (idx < 0) return
+    var list = root.chats.slice()
+    var next = Object.assign({}, list[idx])
+    for (var key in patch) next[key] = patch[key]
+    list[idx] = next
+    root.chats = list
+    if (String(id) === root.activeChatId) root.syncActive()
+    root.syncBusy()
+  }
+
+  function syncActive() {
+    var c = root.activeChat()
+    if (!c) return
+    messages = c.messages
+    busy = c.busy === true
+    lastError = String(c.lastError || "")
+    lastOutcome = String(c.lastOutcome || "")
+    lastReply = String(c.lastReply || "")
+    awaitingPermission = c.awaitingPermission === true
+    activity = c.activity || []
+    liveText = String(c.liveText || "")
+    busyStartedAt = Number(c.startedAt || 0)
+  }
+
+  function syncBusy() {
+    var n = 0
+    var i
+    for (i = 0; i < root.chats.length; i++) {
+      if (root.chats[i].busy === true) n += 1
+    }
+    busyCount = n
+  }
+
+  function setActiveError(message) {
+    root.ensureChat()
+    var msg = String(message || "")
+    root.patchChat(root.activeChatId, { lastError: msg, lastOutcome: msg !== "" ? "error" : "" })
+  }
+
+  function newChat() {
+    root.ensureChat()
+    var cur = root.activeChat()
+    if (cur && !cur.busy && cur.messages.length === 0 && cur.sessionRef === "") return cur.id
+    var c = root.makeChat("", "New chat")
+    root.chats = root.chats.concat([c])
+    root.activeChatId = c.id
+    root.syncActive()
+    return c.id
+  }
+
+  function switchChat(id) {
+    if (root.chatIndex(id) < 0) return
+    root.activeChatId = String(id)
+    root.syncActive()
+  }
+
+  function cycleChat(delta) {
+    var n = root.chats.length
+    if (n < 2) return
+    var idx = root.chatIndex(root.activeChatId)
+    root.switchChat(root.chats[((idx + delta) % n + n) % n].id)
+  }
+
+  function closeChat(id) {
+    var idx = root.chatIndex(id)
+    if (idx < 0) return
+    var runner = root.runners[id]
+    if (runner) {
+      if (root.runtime[id]) root.runtime[id].aborting = true
+      runner.running = false
+    }
+    var list = root.chats.slice()
+    list.splice(idx, 1)
+    if (list.length === 0) list.push(root.makeChat("", "New chat"))
+    root.chats = list
+    if (root.chatIndex(root.activeChatId) < 0)
+      root.activeChatId = list[Math.min(idx, list.length - 1)].id
+    root.syncActive()
+    root.syncBusy()
+  }
+
   function sendPrompt(text) {
+    root.ensureChat()
+    var chat = root.activeChat()
     var prompt = String(text || "").trim()
     if (prompt === "" && root.attachments.length === 0) return false
-    if (sendProcess.running) {
-      lastError = "Alfred is already answering"
+    if (chat.busy) {
+      root.setActiveError("This chat is still answering. Open a new chat (Ctrl+N) for another task.")
       return false
     }
     if (prompt === "") prompt = "Use the attached files as context."
-    lastError = ""
-    lastReply = ""
-    lastOutcome = ""
-    awaitingPermission = false
-    sendOutBuf = ""
-    sendErrBuf = ""
-    pendingPrompt = prompt
-    messages = AlfredModel.appendMessage(messages, "user", prompt)
-    busy = true
-    var cmd = ["fish", "--no-config", root.pluginDir + "/scripts/send.fish", root.sessionName, prompt]
+    var id = chat.id
+    root.runtime[id] = {
+      out: "", err: "", text: "", result: "", resultError: "", sessionId: "",
+      activity: [], permission: false, aborting: false, dirty: false
+    }
+    var patch = {
+      messages: AlfredModel.appendMessage(chat.messages, "user", prompt),
+      busy: true,
+      lastError: "",
+      lastReply: "",
+      lastOutcome: "",
+      awaitingPermission: false,
+      activity: [],
+      liveText: "",
+      startedAt: Date.now()
+    }
+    if (chat.title === "New chat") patch.title = AlfredModel.chatTitle(prompt)
+    root.patchChat(id, patch)
+    var cmd = ["fish", "--no-config", root.pluginDir + "/scripts/send.fish", chat.sessionRef, prompt]
     for (var i = 0; i < root.attachments.length; i++) cmd.push(root.attachments[i])
-    sendProcess.command = cmd
-    sendProcess.running = true
+    var runner = sendRunner.createObject(root, { chatId: id, command: cmd })
+    root.runners[id] = runner
+    runner.running = true
     attachments = []
+    flushTimer.start()
     return true
+  }
+
+  function ingestSendLine(id, line, fromStderr) {
+    var rt = root.runtime[id]
+    if (!rt) return
+    var value = String(line || "")
+    var ev = fromStderr ? null : AlfredModel.parseStreamEvent(value)
+    if (ev) {
+      root.applyStreamEvent(rt, ev)
+    } else {
+      if (fromStderr) rt.err += value + "\n"
+      else rt.out += value + "\n"
+      if (AlfredModel.looksLikePermission(value)) rt.permission = true
+    }
+    rt.dirty = true
+  }
+
+  function applyStreamEvent(rt, ev) {
+    var type = String(ev.type || "")
+    var i
+    if (type === "system") {
+      if (ev.session_id) rt.sessionId = String(ev.session_id)
+    } else if (type === "text") {
+      rt.text += String(ev.text || "")
+    } else if (type === "tool_use") {
+      rt.activity.push({
+        key: String(ev.tool_call_id || ev.name || ""),
+        name: String(ev.name || "tool"),
+        icon: AlfredModel.toolIcon(ev.name),
+        summary: AlfredModel.toolSummary(ev.name, ev.input),
+        status: "running",
+        startedAt: Number(ev.timestamp || Date.now()),
+        durationMs: 0,
+        output: ""
+      })
+      if (rt.activity.length > 80) rt.activity.shift()
+    } else if (type === "tool_result") {
+      var key = String(ev.tool_call_id || ev.name || "")
+      for (i = rt.activity.length - 1; i >= 0; i--) {
+        var row = rt.activity[i]
+        if (row.status !== "running") continue
+        if (row.key !== key && row.name !== String(ev.name || "")) continue
+        row.status = ev.is_error === true ? "error" : "done"
+        row.durationMs = Number(ev.duration_ms || 0)
+        row.output = AlfredModel.previewText(ev.output, 160)
+        break
+      }
+    } else if (type === "result") {
+      rt.result = String(ev.text || "")
+      if (ev.session_id) rt.sessionId = String(ev.session_id)
+      if (ev.error) rt.resultError = String(ev.error)
+    }
+  }
+
+  function flushRuntime(id) {
+    var rt = root.runtime[id]
+    if (!rt || !rt.dirty) return
+    rt.dirty = false
+    var tail = rt.text.length > 1200 ? rt.text.substring(rt.text.length - 1200) : rt.text
+    root.patchChat(id, {
+      activity: rt.activity.map(function(r) { return Object.assign({}, r) }),
+      liveText: tail,
+      awaitingPermission: rt.permission === true
+    })
+  }
+
+  function flushAllRuntime() {
+    for (var id in root.runtime) root.flushRuntime(id)
   }
 
   function addAttachments(raw) {
@@ -152,13 +378,8 @@ Item {
     var raw = String(root.pickOutRaw || "")
     pickingFiles = false
     if (code === 0) root.addAttachments(raw)
-    else if (code === 127) {
-      root.lastError = "No file picker (GTK portal / zenity)"
-      root.lastOutcome = "error"
-    } else if (code !== 1) {
-      root.lastError = "File picker failed"
-      root.lastOutcome = "error"
-    }
+    else if (code === 127) root.setActiveError("No file picker (GTK portal / zenity)")
+    else if (code !== 1) root.setActiveError("File picker failed")
     if (!root.hudOpen) Qt.callLater(function() { root.requestFocus() })
     else root.hudFocused = true
   }
@@ -172,10 +393,80 @@ Item {
   }
 
   function abortSend() {
-    if (!sendProcess.running) return false
-    aborting = true
-    sendProcess.running = false
+    var id = root.activeChatId
+    var runner = root.runners[id]
+    if (!runner) return false
+    if (root.runtime[id]) root.runtime[id].aborting = true
+    runner.running = false
     return true
+  }
+
+  function refreshShortcuts() {
+    if (shortcutsProcess.running) return
+    shortcutsProcess.command = ["fish", "--no-config", root.pluginDir + "/scripts/shortcuts.fish", "get"]
+    shortcutsProcess.running = true
+  }
+
+  function setShortcut(scope, id, keys) {
+    if (shortcutsProcess.running) return false
+    shortcutsSaving = true
+    shortcutsProcess.command = ["fish", "--no-config", root.pluginDir + "/scripts/shortcuts.fish", "set", String(scope), String(id), String(keys)]
+    shortcutsProcess.running = true
+    return true
+  }
+
+  function applyShortcuts(raw) {
+    var parsed = AlfredModel.parseShortcuts(raw)
+    shortcutsSaving = false
+    shortcutsError = parsed.error
+    shortcutsHooked = parsed.hooked
+    if (parsed.global.length > 0) shortcutsGlobal = parsed.global
+    if (parsed.local.length > 0) shortcutsLocal = parsed.local
+  }
+
+  function localShortcut(id) {
+    for (var i = 0; i < root.shortcutsLocal.length; i++) {
+      if (root.shortcutsLocal[i].id === id) return root.shortcutsLocal[i].keys
+    }
+    return ""
+  }
+
+  function refreshSessions() {
+    if (sessionsProcess.running) return
+    sessionsLoading = true
+    sessionsProcess.command = ["fish", "--no-config", root.pluginDir + "/scripts/sessions.fish", "list", "40"]
+    sessionsProcess.running = true
+  }
+
+  function openSession(sessionId, title) {
+    var sid = String(sessionId || "").trim()
+    if (sid === "") return
+    root.ensureChat()
+    var ref = "id:" + sid
+    var i
+    for (i = 0; i < root.chats.length; i++) {
+      if (root.chats[i].sessionRef === ref) {
+        root.switchChat(root.chats[i].id)
+        return
+      }
+    }
+    var label = AlfredModel.chatTitle(title || sid)
+    var cur = root.activeChat()
+    var target = ""
+    if (cur && !cur.busy && cur.messages.length === 0) {
+      target = cur.id
+      root.patchChat(target, { sessionRef: ref, title: label, lastError: "", lastOutcome: "" })
+    } else {
+      var c = root.makeChat(ref, label)
+      root.chats = root.chats.concat([c])
+      root.activeChatId = c.id
+      root.syncActive()
+      target = c.id
+    }
+    if (loadSessionProcess.running) loadSessionProcess.running = false
+    root.loadingSessionChat = target
+    loadSessionProcess.command = ["fish", "--no-config", root.pluginDir + "/scripts/sessions.fish", "load", sid]
+    loadSessionProcess.running = true
   }
 
   function refreshModels() {
@@ -282,6 +573,7 @@ Item {
   function afterProfileChange() {
     slashCatalog = []
     slashItems = []
+    sessionOptions = []
     root.refreshModels()
     root.refreshEffort()
     root.refreshStatus()
@@ -296,8 +588,7 @@ Item {
   function startVoice() {
     if (voiceProcess.running || root.transcribing) return
     voicePath = root.runtimeDir + "/alfred-voice.wav"
-    lastError = ""
-    lastOutcome = ""
+    root.setActiveError("")
     listening = true
     voiceProcess.command = ["fish", "--no-config", root.pluginDir + "/scripts/voice.fish", "start", voicePath]
     voiceProcess.running = true
@@ -315,10 +606,6 @@ Item {
     transcribeDelay.stop()
     transcribing = false
     if (voiceProcess.running) voiceProcess.running = false
-  }
-
-  function ingestAgentLine(line) {
-    if (AlfredModel.looksLikePermission(line)) awaitingPermission = true
   }
 
   function launchDesktop() {
@@ -417,44 +704,51 @@ Item {
       gatewayActive = false
       gatewayState = "unknown"
       statusText = parsed.lastError || "Status failed"
-      if (parsed.lastError) lastError = parsed.lastError
+      if (parsed.lastError) root.setActiveError(parsed.lastError)
       return
     }
     gatewayActive = parsed.active === true
     gatewayState = parsed.state
     statusText = gatewayActive ? "Ready" : ("Gateway " + parsed.state)
-    if (gatewayActive && lastError.indexOf("Gateway") === 0) lastError = ""
+    if (gatewayActive && lastError.indexOf("Gateway") === 0) root.setActiveError("")
   }
 
-  function finishSend(exitCode, stdoutText, stderrText) {
-    busy = false
-    pendingPrompt = ""
-    awaitingPermission = false
-    if (aborting) {
-      aborting = false
-      lastError = ""
-      lastOutcome = ""
+  function finishSend(id, exitCode) {
+    var rt = root.runtime[id]
+    delete root.runners[id]
+    if (rt) root.flushRuntime(id)
+    delete root.runtime[id]
+    var idx = root.chatIndex(id)
+    if (idx < 0 || !rt) {
+      root.syncBusy()
       return
     }
-    var reply = AlfredModel.parseReply(stdoutText)
-    var err = String(stderrText || "").trim()
-    if (exitCode !== 0) {
-      lastError = err !== "" ? AlfredModel.previewText(err, 240) : ("Alfred exited " + exitCode)
-      lastOutcome = "error"
-      if (reply !== "") {
-        lastReply = reply
-        messages = AlfredModel.appendMessage(messages, "assistant", reply)
-        root.replyReceived(reply)
-      }
+    var chat = root.chats[idx]
+    var patch = { busy: false, awaitingPermission: false, liveText: "" }
+    if (rt.sessionId !== "") patch.sessionRef = "id:" + rt.sessionId
+    if (rt.aborting) {
+      patch.lastError = ""
+      patch.lastOutcome = ""
+      root.patchChat(id, patch)
       return
     }
-    if (reply === "") reply = err
-    if (reply === "") reply = "(no output)"
-    lastError = ""
-    lastOutcome = "success"
-    lastReply = reply
-    messages = AlfredModel.appendMessage(messages, "assistant", reply)
-    root.replyReceived(reply)
+    var reply = rt.result !== "" ? rt.result : (rt.text !== "" ? rt.text : AlfredModel.parseReply(rt.out))
+    var err = rt.resultError !== "" ? rt.resultError : AlfredModel.parseReply(rt.err).trim()
+    var failed = exitCode !== 0 || (reply === "" && err !== "")
+    if (failed) {
+      patch.lastError = err !== "" ? AlfredModel.previewText(err, 240) : ("Alfred exited " + exitCode)
+      patch.lastOutcome = "error"
+    } else {
+      if (reply === "") reply = "(no output)"
+      patch.lastError = ""
+      patch.lastOutcome = "success"
+    }
+    if (reply !== "") {
+      patch.lastReply = reply
+      patch.messages = AlfredModel.appendMessage(chat.messages, "assistant", reply)
+    }
+    root.patchChat(id, patch)
+    if (reply !== "") root.replyReceived(reply)
   }
 
   IpcHandler {
@@ -475,6 +769,28 @@ Item {
       root.sendPrompt(text)
       return "ok"
     }
+    function menu(kind: string): string {
+      root.menuRequested(kind)
+      return "ok"
+    }
+    function resume(sessionId: string): string {
+      root.openSession(sessionId, "")
+      return root.activeChatId
+    }
+    function attach(path: string): string {
+      root.addAttachments(path)
+      return String(root.attachments.length)
+    }
+    function voice(): string {
+      root.voiceRequested()
+      return root.listening ? "listening" : "stopped"
+    }
+    function newchat(): string {
+      root.newChat()
+      root.requestFocus()
+      return "ok"
+    }
+    function chats(): string { return String(root.chats.length) }
     function ping(): string { return "ok" }
     function state(): string {
       if (!root.hudOpen) return "hidden"
@@ -568,23 +884,83 @@ Item {
     }
   }
 
-  Process {
-    id: sendProcess
+  Component {
+    id: sendRunner
+
+    Process {
+      id: runner
+      property string chatId: ""
+      running: false
+      stdout: SplitParser {
+        onRead: function(line) { root.ingestSendLine(runner.chatId, line, false) }
+      }
+      stderr: SplitParser {
+        onRead: function(line) { root.ingestSendLine(runner.chatId, line, true) }
+      }
+      onExited: function(exitCode) {
+        root.finishSend(runner.chatId, exitCode)
+        Qt.callLater(function() { runner.destroy() })
+      }
+    }
+  }
+
+  Timer {
+    id: flushTimer
+    interval: 120
+    repeat: true
     running: false
-    stdout: SplitParser {
-      onRead: function(line) {
-        root.sendOutBuf += String(line || "") + "\n"
-        root.ingestAgentLine(line)
-      }
+    onTriggered: {
+      root.flushAllRuntime()
+      if (root.busyCount === 0) stop()
     }
-    stderr: SplitParser {
-      onRead: function(line) {
-        root.sendErrBuf += String(line || "") + "\n"
-        root.ingestAgentLine(line)
-      }
+  }
+
+  Process {
+    id: shortcutsProcess
+    running: false
+    stdout: StdioCollector {
+      id: shortcutsOut
+      waitForEnd: true
     }
-    onExited: function(exitCode) {
-      root.finishSend(exitCode, root.sendOutBuf, root.sendErrBuf)
+    stderr: StdioCollector { waitForEnd: true }
+    onExited: function() { root.applyShortcuts(shortcutsOut.text) }
+  }
+
+  Process {
+    id: sessionsProcess
+    running: false
+    stdout: StdioCollector {
+      id: sessionsOut
+      waitForEnd: true
+    }
+    stderr: StdioCollector { waitForEnd: true }
+    onExited: function() {
+      var parsed = AlfredModel.parseSessions(sessionsOut.text)
+      root.sessionsLoading = false
+      root.sessionsError = parsed.ok ? "" : (parsed.error || "Could not read sessions")
+      if (parsed.ok) root.sessionOptions = parsed.sessions
+    }
+  }
+
+  Process {
+    id: loadSessionProcess
+    running: false
+    stdout: StdioCollector {
+      id: loadSessionOut
+      waitForEnd: true
+    }
+    stderr: StdioCollector { waitForEnd: true }
+    onExited: function() {
+      var target = root.loadingSessionChat
+      root.loadingSessionChat = ""
+      var parsed = AlfredModel.parseSessionLoad(loadSessionOut.text)
+      var idx = root.chatIndex(target)
+      if (idx < 0 || root.chats[idx].busy) return
+      if (!parsed.ok) {
+        root.patchChat(target, { lastError: parsed.error || "Could not load session", lastOutcome: "error" })
+        return
+      }
+      root.patchChat(target, { messages: parsed.messages, lastError: "", lastOutcome: "" })
     }
   }
 
@@ -603,10 +979,7 @@ Item {
       if (exitCode === 0) root.addAttachments(pickOut.text)
       else if (exitCode !== 1) {
         var err = String(pickErr.text || "").trim()
-        if (err !== "") {
-          root.lastError = AlfredModel.previewText(err, 240)
-          root.lastOutcome = "error"
-        }
+        if (err !== "") root.setActiveError(AlfredModel.previewText(err, 240))
       }
       root.requestFocus()
     }
@@ -656,7 +1029,7 @@ Item {
       var text = String(parsed.transcript || "").trim()
       if (exitCode !== 0 && text === "") {
         var err = String(transcribeErr.text || parsed.error || "").trim()
-        if (err !== "") root.lastError = AlfredModel.previewText(err, 240)
+        if (err !== "") root.setActiveError(AlfredModel.previewText(err, 240))
         root.transcriptReady("")
         return
       }
@@ -782,6 +1155,8 @@ Item {
   }
 
   Component.onCompleted: {
+    root.ensureChat()
+    root.refreshShortcuts()
     root.refreshStatus()
     root.refreshProfiles()
     root.refreshModels()

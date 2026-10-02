@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Controls as QQC
 import QtQuick.Layouts
 import Quickshell
 import Quickshell.Wayland
@@ -41,6 +42,29 @@ Item {
   readonly property string profileLabel: alfred ? String(alfred.profileLabel || "default") : "default"
   readonly property string profileName: alfred ? String(alfred.profileName || "default") : "default"
   readonly property var profileOptions: alfred && alfred.profileOptions ? alfred.profileOptions : []
+  readonly property string gatewayKind: alfred ? String(alfred.gatewayKind || "local") : "local"
+  readonly property bool anyBusy: alfred ? alfred.anyBusy === true : false
+  readonly property var chats: alfred && alfred.chats ? alfred.chats : []
+  readonly property string activeChatId: alfred ? String(alfred.activeChatId || "") : ""
+  readonly property var activity: alfred && alfred.activity ? alfred.activity : []
+  readonly property string liveText: alfred ? String(alfred.liveText || "") : ""
+  readonly property real busyStartedAt: alfred ? Number(alfred.busyStartedAt || 0) : 0
+  readonly property var sessionOptions: alfred && alfred.sessionOptions ? alfred.sessionOptions : []
+  readonly property bool sessionsLoading: alfred ? alfred.sessionsLoading === true : false
+  readonly property string sessionsError: alfred ? String(alfred.sessionsError || "") : ""
+  readonly property bool showChatStrip: root.focused
+  readonly property var shortcutsGlobal: alfred && alfred.shortcutsGlobal ? alfred.shortcutsGlobal : []
+  readonly property var shortcutsLocal: alfred && alfred.shortcutsLocal ? alfred.shortcutsLocal : []
+  readonly property bool shortcutsHooked: alfred ? alfred.shortcutsHooked === true : false
+  readonly property string shortcutsError: alfred ? String(alfred.shortcutsError || "") : ""
+  readonly property bool shortcutsSaving: alfred ? alfred.shortcutsSaving === true : false
+  property string captureScope: ""
+  property string captureId: ""
+  property bool previewOpen: false
+  property bool followThread: true
+  readonly property bool previewVisible: root.focused && root.busy && root.previewOpen && !root.menuOpen && !root.pickerOpen
+  property real nowMs: Date.now()
+  property string menuParent: ""
   property string menuKind: ""
   property string pickerMode: ""
   readonly property bool menuOpen: root.menuKind !== ""
@@ -79,11 +103,11 @@ Item {
     }
     return rows
   }
-  readonly property bool showThread: root.focused && !root.busy && !root.listening && !root.slashPanelOpen && (root.lastError !== "" || root.messages.length > 0 || root.attachments.length > 0)
+  readonly property bool showThread: root.focused && !root.busy && !root.listening && !root.slashPanelOpen && (root.lastError !== "" || root.messages.length > 0)
   readonly property string mood: {
     if (root.listening) return "listening"
     if (root.awaitingPermission) return "permission"
-    if (root.busy) return "busy"
+    if (root.busy || (root.compact && root.anyBusy)) return "busy"
     if (root.lastError !== "" || root.lastOutcome === "error") return "error"
     if (root.lastOutcome === "success") return "success"
     return "idle"
@@ -92,7 +116,6 @@ Item {
     if (root.mood === "listening" || root.mood === "error") return Theme.moodRed()
     if (root.mood === "permission") return Theme.moodYellow()
     if (root.mood === "success") return Theme.moodGreen()
-    if (root.mood === "busy") return Color.accent
     return Color.accent
   }
 
@@ -107,11 +130,17 @@ Item {
   readonly property string fontFamily: Style.font.family
   readonly property int ballSize: Math.max(Style.space(52), Style.font.title + Style.space(28))
   readonly property int pillWidth: root.focused ? Style.space(720) : root.ballSize
-  readonly property int pillHeight: root.ballSize
+  readonly property int composerTextHeight: composerInput ? Math.min(Math.ceil(composerInput.implicitHeight), Style.space(Theme.composerMaxPx())) : Style.font.body
+  readonly property bool composerMultiline: composerInput ? composerInput.lineCount > 1 : false
+  readonly property int pillHeight: root.focused
+    ? Math.max(root.ballSize, root.composerTextHeight + root.surfacePadY * 2 + Style.space(16))
+    : root.ballSize
+  readonly property int rowAlign: root.composerMultiline ? Qt.AlignBottom : Qt.AlignVCenter
   readonly property int controlGap: Style.space(Theme.gapPx())
   readonly property int surfacePadX: Style.space(Theme.padXPx())
   readonly property int surfacePadY: Style.space(Theme.padYPx())
-  readonly property int bandMaxHeight: Style.space(280)
+  readonly property int bandMaxHeight: Math.max(Style.space(280), Math.min(Style.space(560),
+    Math.round((root.activeScreen ? root.activeScreen.height : 1080) * 0.55)))
   property string hudScreenName: ""
   readonly property var activeScreen: root.screenByName(root.hudScreenName) || root.focusedScreen()
 
@@ -213,8 +242,187 @@ Item {
   property var menuRows: []
 
   function closeMenus() {
+    root.cancelCapture()
     root.menuKind = ""
+    root.menuParent = ""
     root.menuRows = []
+  }
+
+  function menuTitle() {
+    var titles = {
+      attach: "ATTACH",
+      voice: "VOICE",
+      settings: "ALFRED",
+      model: root.modelOptions.length === 0 ? "NO CACHED MODELS" : "MODEL",
+      effort: "REASONING",
+      profile: "PROFILE",
+      gateway: "GATEWAY",
+      shortcuts: "KEYBOARD SHORTCUTS",
+      sessions: root.gatewayKind === "local" ? "PREVIOUS SESSIONS" : "PREVIOUS SESSIONS · THIS DEVICE"
+    }
+    return titles[root.menuKind] || ""
+  }
+
+  function settingsSummary() {
+    return AlfredModel.shortModelName(root.modelName) + " · " + AlfredModel.effortLabel(root.reasoningEffort)
+  }
+
+  function refreshMenuSource(kind) {
+    if (!alfred) return
+    if (kind === "model" && typeof alfred.refreshModels === "function") alfred.refreshModels()
+    if (kind === "effort" && typeof alfred.refreshEffort === "function") alfred.refreshEffort()
+    if (kind === "gateway" && typeof alfred.refreshGateways === "function") alfred.refreshGateways()
+    if (kind === "profile" && typeof alfred.refreshProfiles === "function") alfred.refreshProfiles()
+    if (kind === "sessions" && typeof alfred.refreshSessions === "function") alfred.refreshSessions()
+    if (kind === "shortcuts" && typeof alfred.refreshShortcuts === "function") alfred.refreshShortcuts()
+  }
+
+  function openSubmenu(kind) {
+    root.closePicker()
+    root.menuParent = "settings"
+    root.menuKind = String(kind)
+    root.refreshMenuSource(root.menuKind)
+    root.rebuildMenu()
+  }
+
+  function menuBack() {
+    root.cancelCapture()
+    var parentKind = root.menuParent
+    root.menuParent = ""
+    root.menuKind = parentKind
+    root.rebuildMenu()
+  }
+
+  function toggleSettings() {
+    if (root.menuKind === "settings" || root.menuParent === "settings") root.closeMenus()
+    else root.toggleMenu("settings")
+  }
+
+  function openSessions() {
+    root.closeSlash()
+    if (root.menuKind !== "sessions") root.toggleMenu("sessions")
+  }
+
+  function toggleSessions() {
+    root.closeSlash()
+    root.toggleMenu("sessions")
+  }
+
+  function focusComposerSoon() {
+    grabFocusTimer.tries = 0
+    grabFocusTimer.restart()
+  }
+
+  function newChat() {
+    root.closeMenus()
+    root.closeSlash()
+    if (alfred && typeof alfred.newChat === "function") alfred.newChat()
+    root.focusComposerSoon()
+  }
+
+  function switchChat(id) {
+    root.closeMenus()
+    if (alfred && typeof alfred.switchChat === "function") alfred.switchChat(id)
+    root.focusComposerSoon()
+  }
+
+  function closeChat(id) {
+    if (alfred && typeof alfred.closeChat === "function") alfred.closeChat(id)
+    root.focusComposerSoon()
+  }
+
+  function chooseSession(id, title) {
+    root.closeMenus()
+    if (alfred && typeof alfred.openSession === "function") alfred.openSession(id, title)
+    root.focusComposerSoon()
+  }
+
+  function togglePreview() {
+    root.closeMenus()
+    root.previewOpen = !root.previewOpen
+    root.nowMs = Date.now()
+  }
+
+  function chatIsOpen(sessionId) {
+    var ref = "id:" + String(sessionId || "")
+    for (var i = 0; i < root.chats.length; i++) {
+      if (String(root.chats[i].sessionRef || "") === ref) return true
+    }
+    return false
+  }
+
+  function localKeys(id) {
+    for (var i = 0; i < root.shortcutsLocal.length; i++) {
+      if (root.shortcutsLocal[i].id === id) return AlfredModel.normalizeCombo(root.shortcutsLocal[i].keys).toLowerCase()
+    }
+    return ""
+  }
+
+  function comboAllowed(combo) {
+    if (!combo) return false
+    if (/^F\d+$/.test(combo.key)) return true
+    return combo.mods.filter(function(m) { return m !== "Shift" }).length > 0
+  }
+
+  function handleShortcut(event) {
+    if (event.modifiers === Qt.NoModifier || event.modifiers === Qt.KeypadModifier) {
+      if (event.key === Qt.Key_PageUp) return root.pageThread(-1)
+      if (event.key === Qt.Key_PageDown) return root.pageThread(1)
+    }
+    var combo = AlfredModel.comboFromEvent(event.key, event.modifiers)
+    if (!root.comboAllowed(combo)) return false
+    var text = AlfredModel.comboText(combo).toLowerCase()
+    var actions = {
+      voice: function() { root.toggleVoice() },
+      newChat: function() { root.newChat() },
+      closeChat: function() { root.closeChat(root.activeChatId) },
+      nextChat: function() { if (alfred && typeof alfred.cycleChat === "function") alfred.cycleChat(1) },
+      prevChat: function() { if (alfred && typeof alfred.cycleChat === "function") alfred.cycleChat(-1) },
+      sessions: function() { root.openSessions() },
+      preview: function() { if (root.busy) root.togglePreview() }
+    }
+    for (var id in actions) {
+      if (root.localKeys(id) === text) {
+        actions[id]()
+        return true
+      }
+    }
+    return false
+  }
+
+  function startCapture(scope, id) {
+    root.captureScope = String(scope)
+    root.captureId = String(id)
+  }
+
+  function cancelCapture() {
+    root.captureScope = ""
+    root.captureId = ""
+  }
+
+  function saveShortcut(scope, id, keys) {
+    if (alfred && typeof alfred.setShortcut === "function") alfred.setShortcut(scope, id, keys)
+  }
+
+  function handleCapture(event) {
+    if (root.captureId === "") return false
+    var scope = root.captureScope
+    var id = root.captureId
+    var bare = (event.modifiers & (Qt.ControlModifier | Qt.AltModifier | Qt.MetaModifier | Qt.ShiftModifier)) === 0
+    if (event.key === Qt.Key_Escape) {
+      root.cancelCapture()
+      return true
+    }
+    if (bare && (event.key === Qt.Key_Backspace || event.key === Qt.Key_Delete)) {
+      root.cancelCapture()
+      root.saveShortcut(scope, id, "")
+      return true
+    }
+    var combo = AlfredModel.comboFromEvent(event.key, event.modifiers)
+    if (!root.comboAllowed(combo)) return true
+    root.cancelCapture()
+    root.saveShortcut(scope, id, scope === "global" ? AlfredModel.comboHypr(combo) : AlfredModel.comboText(combo))
+    return true
   }
 
   function closePicker() {
@@ -307,6 +515,21 @@ Item {
         { id: "conversation", icon: "audio-lines", label: "Start voice conversation", checked: false },
         { id: "dictate", icon: "mic", label: root.listening ? "Stop dictation" : "Voice dictation", checked: root.listening }
       ]
+    } else if (root.menuKind === "settings") {
+      rows = [
+        { id: "model", icon: "pulse", label: "Model", value: AlfredModel.shortModelName(root.modelName), sub: true },
+        { id: "effort", icon: "lightbulb", label: "Reasoning", value: AlfredModel.effortLabel(root.reasoningEffort), sub: true },
+        { id: "profile", icon: "account", label: "Profile", value: root.profileLabel, sub: true },
+        { id: "gateway", icon: root.gatewayKind === "local" ? "server" : "plug", label: "Gateway", value: root.gatewayLabel, sub: true },
+        { id: "shortcuts", icon: "keyboard", label: "Keyboard shortcuts", value: "", sub: true }
+      ]
+    } else if (root.menuKind === "shortcuts") {
+      rows.push({ rowType: "header", label: "GLOBAL · HYPRLAND" })
+      for (i = 0; i < root.shortcutsGlobal.length; i++)
+        rows.push(Object.assign({ rowType: "item", scope: "global" }, root.shortcutsGlobal[i]))
+      rows.push({ rowType: "header", label: "INSIDE THE PILL" })
+      for (i = 0; i < root.shortcutsLocal.length; i++)
+        rows.push(Object.assign({ rowType: "item", scope: "local" }, root.shortcutsLocal[i]))
     } else if (root.menuKind === "model") {
       for (i = 0; i < root.modelOptions.length; i++) {
         rows.push({
@@ -351,24 +574,22 @@ Item {
 
   function toggleMenu(kind) {
     root.closePicker()
+    root.menuParent = ""
     root.menuKind = root.menuKind === kind ? "" : kind
     if (root.menuKind === "") {
       root.menuRows = []
       return
     }
-    if (root.menuKind === "model" && alfred && typeof alfred.refreshModels === "function")
-      alfred.refreshModels()
-    if (root.menuKind === "effort" && alfred && typeof alfred.refreshEffort === "function")
-      alfred.refreshEffort()
-    if (root.menuKind === "gateway" && alfred && typeof alfred.refreshGateways === "function")
-      alfred.refreshGateways()
-    if (root.menuKind === "profile" && alfred && typeof alfred.refreshProfiles === "function")
-      alfred.refreshProfiles()
+    root.refreshMenuSource(root.menuKind)
     root.rebuildMenu()
   }
 
   function activateMenuItem(item) {
     var id = item && item.id ? String(item.id) : ""
+    if (root.menuKind === "settings") {
+      root.openSubmenu(id)
+      return
+    }
     if (root.menuKind === "attach") {
       root.pickKind(id)
       return
@@ -467,7 +688,8 @@ Item {
       return
     }
     if (root.menuOpen) {
-      root.closeMenus()
+      if (root.menuParent !== "") root.menuBack()
+      else root.closeMenus()
       return
     }
     if (root.busy) root.unfocusHud()
@@ -503,6 +725,25 @@ Item {
     function onFocusRequested() { root.focusHud() }
     function onCompactRequested() { root.unfocusHud() }
     function onHideRequested() { root.hideHud() }
+    function onMenuRequested(kind) {
+      var name = String(kind || "settings")
+      root.focusHud()
+      root.closeSlash()
+      if (name === "settings" || name === "sessions" || name === "attach") {
+        root.menuKind = ""
+        root.toggleMenu(name)
+      } else {
+        root.openSubmenu(name)
+      }
+    }
+    function onVoiceRequested() {
+      if (root.listening) {
+        root.stopListen()
+        return
+      }
+      if (!root.opened) root.pinHudScreen()
+      root.startListen()
+    }
     function onTranscriptReady(text) {
       var t = String(text || "").trim()
       if (composerInput && t !== "") {
@@ -516,6 +757,60 @@ Item {
   FontLoader {
     id: menuCodicon
     source: Qt.resolvedUrl("fonts/codicon.ttf")
+  }
+
+  component ActionChip: Rectangle {
+    id: chip
+    property string icon: ""
+    property string label: ""
+    property string tip: ""
+    property bool opened: false
+    signal activated()
+
+    height: parent ? parent.height : Style.space(28)
+    width: chipRow.implicitWidth + Style.space(20)
+    radius: height / 2
+    color: chip.opened ? Util.alpha(Color.accent, 0.20) : (chipHit.containsMouse ? Util.alpha(Color.foreground, 0.10) : root.sheet)
+    border.width: 1
+    border.color: chip.opened ? Util.alpha(Color.accent, 0.55) : Util.alpha(Color.accent, 0.16)
+
+    Row {
+      id: chipRow
+      anchors.centerIn: parent
+      spacing: Style.space(6)
+
+      Text {
+        textFormat: Text.PlainText
+        text: Theme.glyph(chip.icon)
+        color: chipHit.containsMouse || chip.opened ? root.foreground : root.dim
+        font.family: menuCodicon.name !== "" ? menuCodicon.name : "codicon"
+        font.pixelSize: Style.space(Theme.iconPx())
+        anchors.verticalCenter: parent.verticalCenter
+      }
+
+      Text {
+        textFormat: Text.PlainText
+        text: chip.label
+        color: chipHit.containsMouse || chip.opened ? root.foreground : root.dim
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.caption
+        anchors.verticalCenter: parent.verticalCenter
+      }
+    }
+
+    MouseArea {
+      id: chipHit
+      anchors.fill: parent
+      hoverEnabled: true
+      cursorShape: Qt.PointingHandCursor
+      preventStealing: true
+      onPressed: function(mouse) { mouse.accepted = true }
+      onClicked: Qt.callLater(chip.activated)
+    }
+
+    QQC.ToolTip.visible: chip.tip !== "" && chipHit.containsMouse
+    QQC.ToolTip.text: chip.tip
+    QQC.ToolTip.delay: 400
   }
 
   readonly property var attachItems: [
@@ -534,7 +829,7 @@ Item {
   }
 
   onModelNameChanged: {
-    if (root.menuKind === "model") root.rebuildMenu()
+    if (root.menuKind === "model" || root.menuKind === "settings") root.rebuildMenu()
   }
 
   onEffortOptionsChanged: {
@@ -542,7 +837,7 @@ Item {
   }
 
   onReasoningEffortChanged: {
-    if (root.menuKind === "effort") root.rebuildMenu()
+    if (root.menuKind === "effort" || root.menuKind === "settings") root.rebuildMenu()
   }
 
   onGatewayOptionsChanged: {
@@ -550,7 +845,11 @@ Item {
   }
 
   onGatewayConnectionIdChanged: {
-    if (root.menuKind === "gateway") root.rebuildMenu()
+    if (root.menuKind === "gateway" || root.menuKind === "settings") root.rebuildMenu()
+  }
+
+  onGatewayLabelChanged: {
+    if (root.menuKind === "settings") root.rebuildMenu()
   }
 
   onProfileOptionsChanged: {
@@ -558,7 +857,67 @@ Item {
   }
 
   onProfileNameChanged: {
-    if (root.menuKind === "profile") root.rebuildMenu()
+    if (root.menuKind === "profile" || root.menuKind === "settings") root.rebuildMenu()
+  }
+
+  onProfileLabelChanged: {
+    if (root.menuKind === "settings") root.rebuildMenu()
+  }
+
+  onShortcutsGlobalChanged: {
+    if (root.menuKind === "shortcuts") root.rebuildMenu()
+  }
+
+  onShortcutsLocalChanged: {
+    if (root.menuKind === "shortcuts") root.rebuildMenu()
+  }
+
+  onActiveChatIdChanged: {
+    root.closeSlash()
+    Qt.callLater(root.scrollThreadToEnd)
+  }
+
+  onActivityChanged: Qt.callLater(root.scrollPreviewToEnd)
+  onLiveTextChanged: Qt.callLater(root.scrollPreviewToEnd)
+
+  function scrollThreadToEnd() {
+    if (!bandFlick) return
+    jumpAnim.stop()
+    root.followThread = true
+    bandFlick.contentY = Math.max(0, bandFlick.contentHeight - bandFlick.height)
+  }
+
+  function updateFollowThread() {
+    if (bandFlick) root.followThread = bandFlick.distanceToEnd <= Style.space(24)
+  }
+
+  function pageThread(direction) {
+    if (!bandFlick || !root.showThread || !bandFlick.interactive) return false
+    jumpAnim.stop()
+    var maxY = Math.max(0, bandFlick.contentHeight - bandFlick.height)
+    bandFlick.contentY = Math.max(0, Math.min(maxY, bandFlick.contentY + direction * bandFlick.height * 0.85))
+    root.updateFollowThread()
+    return true
+  }
+
+  function jumpThreadToEnd() {
+    if (!bandFlick) return
+    jumpAnim.stop()
+    jumpAnim.to = Math.max(0, bandFlick.contentHeight - bandFlick.height)
+    jumpAnim.start()
+  }
+
+  function scrollPreviewToEnd() {
+    if (!previewFlick || !root.previewVisible) return
+    previewFlick.contentY = Math.max(0, previewFlick.contentHeight - previewFlick.height)
+  }
+
+  Timer {
+    interval: 1000
+    repeat: true
+    running: root.previewVisible
+    triggeredOnStart: true
+    onTriggered: root.nowMs = Date.now()
   }
 
   onAwaitingPermissionChanged: {
@@ -619,6 +978,10 @@ Item {
       anchors.fill: parent
       focus: root.focused
       Keys.onPressed: function(event) {
+        if (root.handleCapture(event) || root.handleShortcut(event)) {
+          event.accepted = true
+          return
+        }
         if (event.key === Qt.Key_Escape) {
           root.handleEscape()
           event.accepted = true
@@ -677,16 +1040,22 @@ Item {
         id: pill
         width: parent.width
         height: root.pillHeight
+
+        Behavior on height {
+          NumberAnimation { duration: 120; easing.type: Easing.OutCubic }
+        }
+        readonly property bool ringRunning: root.listening || (root.mood === "busy" && !root.awaitingPermission)
         radius: root.compact ? height / 2 : Style.space(Theme.arcRadiusPx())
         color: root.surface
-        border.width: root.mood === "idle" ? 1 : 2
+        border.width: pill.ringRunning ? 0 : (root.mood === "idle" ? 1 : 2)
         border.color: root.rim
         clip: true
 
         GlowRing {
           anchors.fill: parent
           z: 0
-          running: root.listening || (root.busy && !root.awaitingPermission)
+          radius: pill.radius
+          running: pill.ringRunning
           accent: root.listening ? Theme.moodRed() : root.foreground
         }
 
@@ -749,127 +1118,102 @@ Item {
 
           HudButton {
             icon: "add"
+            Layout.alignment: root.rowAlign
             opened: root.menuKind === "attach"
-            tooltipText: "Attach"
+            active: root.attachments.length > 0
+            badge: root.attachments.length
+            tooltipText: root.attachments.length > 0 ? root.attachments.length + " attached · click to add more" : "Attach"
             onClicked: root.toggleMenu("attach")
           }
 
-          TextField {
-            id: composerInput
+          Flickable {
+            id: composerFlick
             Layout.fillWidth: true
-            Layout.fillHeight: true
             Layout.preferredWidth: 0
             Layout.minimumWidth: Style.space(Theme.inputMinPx())
+            Layout.preferredHeight: root.composerTextHeight
             Layout.alignment: Qt.AlignVCenter
-            implicitWidth: 0
-            foreground: root.foreground
-            accent: Color.accent
-            placeholderText: root.busy ? "Alfred is working…" : (root.transcribing ? "Transcribing…" : (root.listening ? "Listening…" : (root.gatewayActive ? "Ask Alfred" : "Gateway down")))
-            placeholderTextColor: root.dim
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.body
-            background: Item {}
-            leftPadding: Style.space(4)
-            rightPadding: Style.space(4)
-            topPadding: 0
-            bottomPadding: 0
-            horizontalPadding: Style.space(4)
-            verticalPadding: 0
-            readOnly: root.busy
-            enabled: root.focused && !root.busy
-            onTextChanged: root.syncSlash()
-            onAccepted: {
-              if (root.tryApplySlash()) return
-              root.submit()
-            }
-            Keys.onReturnPressed: function(event) {
-              if (event.modifiers & Qt.ShiftModifier) return
-              if (root.tryApplySlash()) {
-                event.accepted = true
-                return
-              }
-              root.submit()
-              event.accepted = true
-            }
-            Keys.onEnterPressed: function(event) {
-              if (event.modifiers & Qt.ShiftModifier) return
-              if (root.tryApplySlash()) {
-                event.accepted = true
-                return
-              }
-              root.submit()
-              event.accepted = true
-            }
-            Keys.onPressed: function(event) {
-              if (event.key === Qt.Key_Escape) {
-                root.handleEscape()
-                event.accepted = true
-                return
-              }
-              if (!root.slashPanelOpen) return
-              if (event.key === Qt.Key_Down) {
-                root.moveSlash(1)
-                event.accepted = true
-                return
-              }
-              if (event.key === Qt.Key_Up) {
-                root.moveSlash(-1)
-                event.accepted = true
-                return
-              }
-              if (event.key === Qt.Key_Tab) {
-                root.tryApplySlash()
-                event.accepted = true
+            clip: true
+            boundsBehavior: Flickable.StopAtBounds
+            flickableDirection: Flickable.VerticalFlick
+            interactive: contentHeight > height
+
+            QQC.TextArea.flickable: QQC.TextArea {
+              id: composerInput
+              wrapMode: TextEdit.Wrap
+              color: root.foreground
+              selectionColor: Color.accent
+              selectedTextColor: Color.background
+              placeholderText: root.busy ? "Alfred is working…" : (root.transcribing ? "Transcribing…" : (root.listening ? "Listening…" : (root.gatewayActive ? "Ask Alfred" : "Gateway down")))
+              placeholderTextColor: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.body
+              background: Item {}
+              leftPadding: Style.space(4)
+              rightPadding: Style.space(4)
+              topPadding: Style.space(2)
+              bottomPadding: Style.space(2)
+              readOnly: root.busy
+              enabled: root.focused && !root.busy
+              onTextChanged: root.syncSlash()
+              Keys.onPressed: function(event) {
+                if (root.handleCapture(event) || root.handleShortcut(event)) {
+                  event.accepted = true
+                  return
+                }
+                if (event.key === Qt.Key_Escape) {
+                  root.handleEscape()
+                  event.accepted = true
+                  return
+                }
+                if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+                  if (event.modifiers & Qt.ShiftModifier) return
+                  if (!root.tryApplySlash()) root.submit()
+                  event.accepted = true
+                  return
+                }
+                if (!root.slashPanelOpen) return
+                if (event.key === Qt.Key_Down) {
+                  root.moveSlash(1)
+                  event.accepted = true
+                  return
+                }
+                if (event.key === Qt.Key_Up) {
+                  root.moveSlash(-1)
+                  event.accepted = true
+                  return
+                }
+                if (event.key === Qt.Key_Tab) {
+                  root.tryApplySlash()
+                  event.accepted = true
+                }
               }
             }
           }
 
           HudButton {
-            wide: true
-            compact: root.pillWidth < Style.space(560)
-            icon: root.pillWidth < Style.space(560) ? "chevron-down" : ""
-            trailingIcon: root.pillWidth < Style.space(560) ? "" : "chevron-down"
-            label: AlfredModel.shortModelName(root.modelName)
-            opened: root.menuKind === "model"
-            tooltipText: root.modelName !== "" ? ("Model: " + root.modelName) : "Switch model"
-            onClicked: root.toggleMenu("model")
+            visible: root.busy
+            icon: root.previewOpen ? "eye-closed" : "eye"
+            Layout.alignment: root.rowAlign
+            active: root.previewOpen
+            tooltipText: root.previewOpen ? "Hide live preview (Ctrl+P)" : "Show what Alfred is doing (Ctrl+P)"
+            onClicked: root.togglePreview()
           }
 
           HudButton {
             wide: true
-            compact: root.pillWidth < Style.space(640)
-            icon: root.pillWidth < Style.space(640) ? "lightbulb" : ""
-            trailingIcon: root.pillWidth < Style.space(640) ? "" : "chevron-down"
-            label: AlfredModel.effortLabel(root.reasoningEffort)
-            opened: root.menuKind === "effort"
-            tooltipText: "Reasoning effort: " + AlfredModel.effortLabel(root.reasoningEffort)
-            onClicked: root.toggleMenu("effort")
-          }
-
-          HudButton {
-            wide: true
-            compact: root.pillWidth < Style.space(700)
-            icon: "account"
-            trailingIcon: root.pillWidth < Style.space(700) ? "" : "chevron-down"
-            label: root.pillWidth < Style.space(700) ? "" : root.profileLabel
-            opened: root.menuKind === "profile"
-            tooltipText: "Profile: " + root.profileLabel
-            onClicked: root.toggleMenu("profile")
-          }
-
-          HudButton {
-            wide: true
-            compact: root.pillWidth < Style.space(780)
-            icon: root.gatewayConnectionId === "local" || root.gatewayLabel === "This device" ? "server" : "plug"
-            trailingIcon: root.pillWidth < Style.space(780) ? "" : "chevron-down"
-            label: root.pillWidth < Style.space(780) ? "" : root.gatewayLabel
-            opened: root.menuKind === "gateway"
-            tooltipText: "Gateway: " + root.gatewayLabel
-            onClicked: root.toggleMenu("gateway")
+            Layout.alignment: root.rowAlign
+            icon: "settings-gear"
+            trailingIcon: "chevron-down"
+            label: root.settingsSummary()
+            opened: root.menuKind === "settings" || root.menuParent === "settings"
+            tooltipText: "Model, reasoning, profile, gateway and sessions"
+            onClicked: root.toggleSettings()
           }
 
           HudButton {
             icon: root.listening ? "stop" : "mic"
+            Layout.alignment: root.rowAlign
             active: root.listening
             tooltipText: root.listening ? "Stop dictation" : "Dictate"
             onClicked: root.toggleVoice()
@@ -877,6 +1221,7 @@ Item {
 
           HudButton {
             primary: true
+            Layout.alignment: root.rowAlign
             icon: root.showVoicePrimary ? "audio-lines" : (root.showStop ? "stop" : "arrow-up")
             enabled: root.showVoicePrimary || root.showStop || root.hasPayload
             tooltipText: root.showVoicePrimary ? "Start voice conversation" : (root.showStop ? "Stop" : "Send")
@@ -885,6 +1230,7 @@ Item {
 
           HudButton {
             icon: "screen-normal"
+            Layout.alignment: root.rowAlign
             tooltipText: "Exit HUD"
             onClicked: root.openDesktop()
           }
@@ -892,9 +1238,293 @@ Item {
       }
 
       Item {
+        id: chipWrap
+        width: parent.width
+        height: root.focused && root.attachments.length > 0 ? chipRow.implicitHeight + Style.space(8) : 0
+        clip: true
+        opacity: height > 0 ? 1 : 0
+
+        Behavior on height {
+          NumberAnimation { duration: 180; easing.type: Easing.OutCubic }
+        }
+
+        Flow {
+          id: chipRow
+          width: parent.width
+          y: Style.space(8)
+          spacing: Style.space(6)
+
+          Repeater {
+            model: root.attachments
+
+            Rectangle {
+              id: attachChip
+              required property var modelData
+              height: Style.space(26)
+              width: attachInner.implicitWidth + Style.space(18)
+              radius: height / 2
+              color: attachChipHit.containsMouse ? Util.alpha(Color.accent, 0.24) : Util.alpha(Color.accent, 0.14)
+              border.width: 1
+              border.color: Util.alpha(Color.accent, 0.35)
+
+              MouseArea {
+                id: attachChipHit
+                anchors.fill: parent
+                hoverEnabled: true
+              }
+
+              QQC.ToolTip.visible: attachChipHit.containsMouse
+              QQC.ToolTip.text: String(attachChip.modelData)
+              QQC.ToolTip.delay: 500
+
+              Row {
+                id: attachInner
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.left: parent.left
+                anchors.leftMargin: Style.space(9)
+                spacing: Style.space(6)
+
+                Text {
+                  textFormat: Text.PlainText
+                  text: Theme.glyph(AlfredModel.attachmentIcon(attachChip.modelData))
+                  color: Color.accent
+                  font.family: menuCodicon.name !== "" ? menuCodicon.name : "codicon"
+                  font.pixelSize: Style.space(13)
+                  anchors.verticalCenter: parent.verticalCenter
+                }
+
+                Text {
+                  textFormat: Text.PlainText
+                  text: AlfredModel.fileName(attachChip.modelData)
+                  width: Math.min(implicitWidth, Style.space(220))
+                  elide: Text.ElideMiddle
+                  color: root.foreground
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  anchors.verticalCenter: parent.verticalCenter
+                }
+
+                Text {
+                  textFormat: Text.PlainText
+                  text: Theme.glyph("close")
+                  color: chipClose.containsMouse ? Color.urgent : root.dim
+                  font.family: menuCodicon.name !== "" ? menuCodicon.name : "codicon"
+                  font.pixelSize: Style.space(12)
+                  anchors.verticalCenter: parent.verticalCenter
+
+                  MouseArea {
+                    id: chipClose
+                    anchors.fill: parent
+                    anchors.margins: -5
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    preventStealing: true
+                    onPressed: function(mouse) { mouse.accepted = true }
+                    onClicked: {
+                      var path = String(attachChip.modelData)
+                      Qt.callLater(function() { root.removeAttachment(path) })
+                    }
+                  }
+                }
+              }
+            }
+          }
+
+          Rectangle {
+            visible: root.attachments.length > 1
+            height: Style.space(26)
+            width: clearInner.implicitWidth + Style.space(18)
+            radius: height / 2
+            color: clearHit.containsMouse ? Util.alpha(Color.urgent, 0.16) : "transparent"
+            border.width: 1
+            border.color: Util.alpha(Color.foreground, 0.14)
+
+            Row {
+              id: clearInner
+              anchors.centerIn: parent
+              spacing: Style.space(6)
+
+              Text {
+                textFormat: Text.PlainText
+                text: Theme.glyph("clear-all")
+                color: clearHit.containsMouse ? Color.urgent : root.dim
+                font.family: menuCodicon.name !== "" ? menuCodicon.name : "codicon"
+                font.pixelSize: Style.space(12)
+                anchors.verticalCenter: parent.verticalCenter
+              }
+
+              Text {
+                textFormat: Text.PlainText
+                text: "Clear all"
+                color: clearHit.containsMouse ? Color.urgent : root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                anchors.verticalCenter: parent.verticalCenter
+              }
+            }
+
+            MouseArea {
+              id: clearHit
+              anchors.fill: parent
+              hoverEnabled: true
+              cursorShape: Qt.PointingHandCursor
+              preventStealing: true
+              onPressed: function(mouse) { mouse.accepted = true }
+              onClicked: Qt.callLater(function() { if (alfred && typeof alfred.clearAttachments === "function") alfred.clearAttachments() })
+            }
+          }
+        }
+      }
+
+      Item {
+        id: chatStripWrap
+        width: parent.width
+        height: root.showChatStrip ? Style.space(34) : 0
+        clip: true
+        opacity: height > 0 ? 1 : 0
+        z: 21
+
+        Behavior on height {
+          NumberAnimation { duration: 140; easing.type: Easing.OutCubic }
+        }
+
+        Flickable {
+          anchors.fill: parent
+          anchors.topMargin: Style.space(6)
+          contentWidth: chatRow.implicitWidth
+          contentHeight: height
+          clip: true
+          boundsBehavior: Flickable.StopAtBounds
+          flickableDirection: Flickable.HorizontalFlick
+          interactive: contentWidth > width
+
+          Row {
+            id: chatRow
+            height: parent.height
+            spacing: Style.space(6)
+
+            ActionChip {
+              icon: "add"
+              label: "New chat"
+              tip: "New chat (Ctrl+N)"
+              onActivated: root.newChat()
+            }
+
+            ActionChip {
+              icon: "history"
+              label: "Previous sessions"
+              tip: "Previous sessions (Ctrl+H)"
+              opened: root.menuKind === "sessions"
+              onActivated: root.toggleSessions()
+            }
+
+            Rectangle {
+              visible: root.chats.length > 1
+              width: 1
+              height: parent.height - Style.space(8)
+              anchors.verticalCenter: parent.verticalCenter
+              color: Util.alpha(root.dim, 0.35)
+            }
+
+            Repeater {
+              model: root.chats.length > 1 ? root.chats : 0
+
+              Rectangle {
+                id: chatChip
+                required property var modelData
+                readonly property bool current: String(modelData.id) === root.activeChatId
+                readonly property string chipState: modelData.busy === true
+                  ? (modelData.awaitingPermission === true ? "permission" : "busy")
+                  : (String(modelData.lastOutcome || "") === "error" ? "error" : (String(modelData.lastOutcome || "") === "success" ? "success" : "idle"))
+                height: chatRow.height
+                width: chipInner.implicitWidth + Style.space(18)
+                radius: height / 2
+                color: current ? Util.alpha(Color.accent, 0.20) : (chipHit.containsMouse ? Util.alpha(Color.foreground, 0.10) : root.sheet)
+                border.width: 1
+                border.color: current ? Util.alpha(Color.accent, 0.55) : Util.alpha(Color.accent, 0.16)
+
+                MouseArea {
+                  id: chipHit
+                  anchors.fill: parent
+                  hoverEnabled: true
+                  cursorShape: Qt.PointingHandCursor
+                  preventStealing: true
+                  onPressed: function(mouse) { mouse.accepted = true }
+                  onClicked: {
+                    var id = String(chatChip.modelData.id)
+                    Qt.callLater(function() { root.switchChat(id) })
+                  }
+                }
+
+                Row {
+                  id: chipInner
+                  anchors.centerIn: parent
+                  spacing: Style.space(6)
+
+                  Rectangle {
+                    visible: chatChip.chipState !== "idle"
+                    width: Style.space(7)
+                    height: width
+                    radius: width / 2
+                    anchors.verticalCenter: parent.verticalCenter
+                    color: chatChip.chipState === "busy" ? Color.accent
+                      : (chatChip.chipState === "permission" ? Theme.moodYellow()
+                        : (chatChip.chipState === "error" ? Theme.moodRed() : Theme.moodGreen()))
+
+                    SequentialAnimation on opacity {
+                      running: chatChip.chipState === "busy"
+                      loops: Animation.Infinite
+                      alwaysRunToEnd: true
+                      NumberAnimation { from: 1; to: 0.25; duration: 600; easing.type: Easing.InOutSine }
+                      NumberAnimation { from: 0.25; to: 1; duration: 600; easing.type: Easing.InOutSine }
+                    }
+                  }
+
+                  Text {
+                    textFormat: Text.PlainText
+                    text: String(chatChip.modelData.title || "Chat")
+                    width: Math.min(implicitWidth, Style.space(150))
+                    elide: Text.ElideRight
+                    color: chatChip.current ? root.foreground : root.dim
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                    anchors.verticalCenter: parent.verticalCenter
+                  }
+
+                  Text {
+                    textFormat: Text.PlainText
+                    text: Theme.glyph("close")
+                    opacity: chatChip.current || chipHit.containsMouse || chatClose.containsMouse ? 1 : 0.35
+                    color: chatClose.containsMouse ? Color.urgent : root.dim
+                    font.family: menuCodicon.name !== "" ? menuCodicon.name : "codicon"
+                    font.pixelSize: Style.space(12)
+                    anchors.verticalCenter: parent.verticalCenter
+
+                    MouseArea {
+                      id: chatClose
+                      anchors.fill: parent
+                      anchors.margins: -4
+                      hoverEnabled: true
+                      cursorShape: Qt.PointingHandCursor
+                      preventStealing: true
+                      onPressed: function(mouse) { mouse.accepted = true }
+                      onClicked: {
+                        var id = String(chatChip.modelData.id)
+                        Qt.callLater(function() { root.closeChat(id) })
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+
+      Item {
         id: menuWrap
         width: parent.width
-        height: root.focused && root.menuOpen && !root.pickerOpen && !root.slashPanelOpen ? Math.min(menuCol.implicitHeight + Style.space(20), Style.space(240)) : 0
+        height: root.focused && root.menuOpen && !root.pickerOpen && !root.slashPanelOpen ? Math.min(menuCol.implicitHeight + Style.space(20), Style.space(root.menuKind === "shortcuts" ? 420 : 320)) : 0
         clip: true
         opacity: height > 0 ? 1 : 0
         z: 20
@@ -911,30 +1541,356 @@ Item {
           border.width: 1
           border.color: Util.alpha(Color.accent, 0.18)
 
+          Flickable {
+            id: menuFlick
+            anchors.fill: parent
+            anchors.margins: Style.space(8)
+            contentWidth: width
+            contentHeight: menuCol.implicitHeight
+            clip: true
+            boundsBehavior: Flickable.StopAtBounds
+            flickableDirection: Flickable.VerticalFlick
+            interactive: contentHeight > height
+
           Column {
             id: menuCol
-            anchors.left: parent.left
-            anchors.right: parent.right
-            anchors.top: parent.top
-            anchors.margins: Style.space(8)
+            width: menuFlick.width
             spacing: Style.space(2)
 
-            Text {
+            Item {
               width: parent.width
+              height: Style.space(22)
+
+              Row {
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: Style.space(4)
+
+                Text {
+                  visible: root.menuParent !== ""
+                  textFormat: Text.PlainText
+                  text: Theme.glyph("chevron-left")
+                  color: menuBackHit.containsMouse ? root.foreground : root.dim
+                  font.family: menuCodicon.name !== "" ? menuCodicon.name : "codicon"
+                  font.pixelSize: Style.space(Theme.iconPx())
+                  anchors.verticalCenter: parent.verticalCenter
+                }
+
+                Text {
+                  textFormat: Text.PlainText
+                  text: root.menuTitle()
+                  color: menuBackHit.containsMouse ? root.foreground : root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  font.bold: true
+                  anchors.verticalCenter: parent.verticalCenter
+                }
+              }
+
+              MouseArea {
+                id: menuBackHit
+                anchors.fill: parent
+                enabled: root.menuParent !== ""
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                preventStealing: true
+                onPressed: function(mouse) { mouse.accepted = true }
+                onClicked: Qt.callLater(root.menuBack)
+              }
+            }
+
+            Repeater {
+              model: root.menuKind === "settings" ? root.menuRows : 0
+
+              Rectangle {
+                id: settingsRow
+                required property var modelData
+                width: menuCol.width
+                height: Style.space(30)
+                radius: Style.space(6)
+                color: settingsHit.containsMouse ? Util.alpha(Color.foreground, 0.10) : "transparent"
+
+                Row {
+                  anchors.left: parent.left
+                  anchors.leftMargin: Style.space(8)
+                  anchors.verticalCenter: parent.verticalCenter
+                  spacing: Style.space(8)
+
+                  Text {
+                    textFormat: Text.PlainText
+                    text: Theme.glyph(String(settingsRow.modelData.icon || ""))
+                    color: root.dim
+                    font.family: menuCodicon.name !== "" ? menuCodicon.name : "codicon"
+                    font.pixelSize: Style.space(Theme.iconPx())
+                    anchors.verticalCenter: parent.verticalCenter
+                  }
+
+                  Text {
+                    textFormat: Text.PlainText
+                    text: String(settingsRow.modelData.label || "")
+                    color: root.foreground
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                    anchors.verticalCenter: parent.verticalCenter
+                  }
+                }
+
+                Row {
+                  anchors.right: parent.right
+                  anchors.rightMargin: Style.space(8)
+                  anchors.verticalCenter: parent.verticalCenter
+                  spacing: Style.space(6)
+
+                  Text {
+                    textFormat: Text.PlainText
+                    text: String(settingsRow.modelData.value || "")
+                    width: Math.min(implicitWidth, Style.space(260))
+                    elide: Text.ElideRight
+                    color: root.dim
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                    anchors.verticalCenter: parent.verticalCenter
+                  }
+
+                  Text {
+                    visible: settingsRow.modelData.sub === true
+                    textFormat: Text.PlainText
+                    text: Theme.glyph("chevron-right")
+                    color: root.dim
+                    font.family: menuCodicon.name !== "" ? menuCodicon.name : "codicon"
+                    font.pixelSize: Style.space(Theme.iconPx())
+                    anchors.verticalCenter: parent.verticalCenter
+                  }
+                }
+
+                MouseArea {
+                  id: settingsHit
+                  anchors.fill: parent
+                  hoverEnabled: true
+                  cursorShape: Qt.PointingHandCursor
+                  preventStealing: true
+                  onPressed: function(mouse) {
+                    mouse.accepted = true
+                    var row = settingsRow.modelData
+                    Qt.callLater(function() { root.activateMenuItem(row) })
+                  }
+                }
+              }
+            }
+
+            Text {
+              visible: root.menuKind === "shortcuts" && (!root.shortcutsHooked || root.shortcutsError !== "")
+              width: parent.width
+              leftPadding: Style.space(8)
+              rightPadding: Style.space(8)
+              wrapMode: Text.WordWrap
               textFormat: Text.PlainText
-              text: root.menuKind === "attach"
-                ? "ATTACH"
-                : (root.menuKind === "effort"
-                  ? "REASONING"
-                  : (root.menuKind === "gateway"
-                    ? "GATEWAY"
-                    : (root.menuKind === "profile"
-                      ? "PROFILE"
-                      : (root.modelOptions.length === 0 ? "No cached models" : "Model"))))
+              text: root.shortcutsError !== "" ? root.shortcutsError
+                : "Global keys are not active: add pcall(require, \"hypr.alfred\") to ~/.config/hypr/bindings.lua"
+              color: root.shortcutsError !== "" ? Color.urgent : Theme.moodYellow()
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+
+            Repeater {
+              model: root.menuKind === "shortcuts" ? root.menuRows : 0
+
+              Rectangle {
+                id: shortcutRow
+                required property var modelData
+                readonly property bool header: modelData.rowType === "header"
+                readonly property bool capturing: !header && root.captureScope === modelData.scope && root.captureId === modelData.id
+                readonly property string keys: String(modelData.keys || "")
+                readonly property bool custom: !header && keys !== String(modelData.defaultKeys || "")
+                width: menuCol.width
+                height: header ? Style.space(24) : Style.space(30)
+                radius: Style.space(6)
+                color: capturing ? Util.alpha(Color.accent, 0.16)
+                  : (!header && shortcutHit.containsMouse ? Util.alpha(Color.foreground, 0.10) : "transparent")
+
+                Text {
+                  visible: shortcutRow.header
+                  anchors.left: parent.left
+                  anchors.leftMargin: Style.space(8)
+                  anchors.bottom: parent.bottom
+                  anchors.bottomMargin: Style.space(4)
+                  textFormat: Text.PlainText
+                  text: String(shortcutRow.modelData.label || "")
+                  color: root.dim
+                  opacity: 0.7
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  font.letterSpacing: 1
+                }
+
+                Text {
+                  visible: !shortcutRow.header
+                  anchors.left: parent.left
+                  anchors.leftMargin: Style.space(8)
+                  anchors.verticalCenter: parent.verticalCenter
+                  textFormat: Text.PlainText
+                  text: String(shortcutRow.modelData.label || "")
+                  color: root.foreground
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                }
+
+                Row {
+                  visible: !shortcutRow.header
+                  anchors.right: parent.right
+                  anchors.rightMargin: Style.space(8)
+                  anchors.verticalCenter: parent.verticalCenter
+                  spacing: Style.space(8)
+
+                  Text {
+                    visible: shortcutRow.custom && !shortcutRow.capturing
+                    textFormat: Text.PlainText
+                    text: Theme.glyph("clear-all")
+                    color: resetHit.containsMouse ? root.foreground : root.dim
+                    font.family: menuCodicon.name !== "" ? menuCodicon.name : "codicon"
+                    font.pixelSize: Style.space(12)
+                    anchors.verticalCenter: parent.verticalCenter
+
+                    MouseArea {
+                      id: resetHit
+                      anchors.fill: parent
+                      anchors.margins: -4
+                      hoverEnabled: true
+                      cursorShape: Qt.PointingHandCursor
+                      preventStealing: true
+                      onPressed: function(mouse) {
+                        mouse.accepted = true
+                        var row = shortcutRow.modelData
+                        Qt.callLater(function() { root.saveShortcut(row.scope, row.id, "default") })
+                      }
+                    }
+                  }
+
+                  Rectangle {
+                    height: Style.space(20)
+                    width: keyText.implicitWidth + Style.space(14)
+                    radius: Style.space(5)
+                    color: shortcutRow.capturing ? "transparent" : Util.alpha(Color.foreground, 0.08)
+                    border.width: 1
+                    border.color: shortcutRow.capturing ? Color.accent : Util.alpha(Color.foreground, 0.14)
+                    anchors.verticalCenter: parent.verticalCenter
+
+                    Text {
+                      id: keyText
+                      anchors.centerIn: parent
+                      textFormat: Text.PlainText
+                      text: shortcutRow.capturing ? "Press keys…"
+                        : (shortcutRow.keys !== "" ? shortcutRow.keys : "Off")
+                      color: shortcutRow.capturing ? Color.accent
+                        : (shortcutRow.keys !== "" ? root.foreground : root.dim)
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.caption
+                    }
+                  }
+                }
+
+                MouseArea {
+                  id: shortcutHit
+                  anchors.fill: parent
+                  z: -1
+                  enabled: !shortcutRow.header
+                  hoverEnabled: true
+                  cursorShape: Qt.PointingHandCursor
+                  preventStealing: true
+                  onPressed: function(mouse) {
+                    mouse.accepted = true
+                    var row = shortcutRow.modelData
+                    Qt.callLater(function() {
+                      if (shortcutRow.capturing) root.cancelCapture()
+                      else root.startCapture(row.scope, row.id)
+                      root.focusComposerSoon()
+                    })
+                  }
+                }
+              }
+            }
+
+            Text {
+              visible: root.menuKind === "shortcuts"
+              width: parent.width
+              topPadding: Style.space(6)
+              leftPadding: Style.space(8)
+              rightPadding: Style.space(8)
+              wrapMode: Text.WordWrap
+              textFormat: Text.PlainText
+              text: root.captureId !== "" ? "Press the new combination · Esc cancels · Backspace turns it off"
+                : (root.shortcutsSaving ? "Saving…" : "Click a shortcut to change it · the reset icon restores the default")
               color: root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
-              font.bold: root.menuKind === "attach" || root.menuKind === "effort" || root.menuKind === "gateway" || root.menuKind === "profile"
+            }
+
+            Text {
+              visible: root.menuKind === "sessions" && root.sessionOptions.length === 0
+              width: parent.width
+              leftPadding: Style.space(8)
+              textFormat: Text.PlainText
+              text: root.sessionsLoading ? "Loading sessions…" : (root.sessionsError !== "" ? root.sessionsError : "No previous sessions")
+              color: root.sessionsError !== "" ? Color.urgent : root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+
+            Repeater {
+              model: root.menuKind === "sessions" ? root.sessionOptions : 0
+
+              Rectangle {
+                id: sessionRow
+                required property var modelData
+                readonly property bool isOpen: root.chatIsOpen(modelData.id)
+                width: menuCol.width
+                height: Style.space(40)
+                radius: Style.space(6)
+                color: isOpen ? Util.alpha(Color.accent, 0.14) : (sessionHit.containsMouse ? Util.alpha(Color.foreground, 0.08) : "transparent")
+
+                Column {
+                  anchors.left: parent.left
+                  anchors.right: parent.right
+                  anchors.verticalCenter: parent.verticalCenter
+                  anchors.leftMargin: Style.space(8)
+                  anchors.rightMargin: Style.space(8)
+                  spacing: Style.space(1)
+
+                  Text {
+                    width: parent.width
+                    textFormat: Text.PlainText
+                    text: String(sessionRow.modelData.title || sessionRow.modelData.id)
+                    elide: Text.ElideRight
+                    color: sessionRow.isOpen ? Color.accent : root.foreground
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                  }
+
+                  Text {
+                    width: parent.width
+                    textFormat: Text.PlainText
+                    text: [String(sessionRow.modelData.source || ""), String(sessionRow.modelData.lastActive || ""), sessionRow.modelData.messageCount + " msgs"]
+                      .filter(function(part) { return part !== "" }).join(" · ")
+                    elide: Text.ElideRight
+                    color: root.dim
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                  }
+                }
+
+                MouseArea {
+                  id: sessionHit
+                  anchors.fill: parent
+                  hoverEnabled: true
+                  cursorShape: Qt.PointingHandCursor
+                  preventStealing: true
+                  onPressed: function(mouse) {
+                    mouse.accepted = true
+                    var id = String(sessionRow.modelData.id)
+                    var title = String(sessionRow.modelData.title || "")
+                    Qt.callLater(function() { root.chooseSession(id, title) })
+                  }
+                }
+              }
             }
 
             Repeater {
@@ -1211,6 +2167,7 @@ Item {
               }
             }
           }
+          }
         }
       }
 
@@ -1375,9 +2332,9 @@ Item {
       }
 
       Item {
-        id: chipWrap
+        id: previewWrap
         width: parent.width
-        height: root.focused && !root.busy && root.attachments.length > 0 ? chipRow.implicitHeight + Style.space(8) : 0
+        height: root.previewVisible ? Math.min(previewCol.implicitHeight + Style.space(28), Style.space(340)) : 0
         clip: true
         opacity: height > 0 ? 1 : 0
 
@@ -1385,54 +2342,214 @@ Item {
           NumberAnimation { duration: 180; easing.type: Easing.OutCubic }
         }
 
-        Flow {
-          id: chipRow
-          width: parent.width
-          y: Style.space(8)
-          spacing: Style.space(6)
+        Rectangle {
+          anchors.fill: parent
+          anchors.topMargin: Style.space(8)
+          radius: Style.space(18)
+          color: root.sheet
+          border.width: 1
+          border.color: Util.alpha(Color.accent, 0.28)
 
-          Repeater {
-            model: root.attachments
-            Rectangle {
-              required property var modelData
-              height: Style.space(22)
-              width: chipRowInner.implicitWidth + Style.space(14)
-              radius: height / 2
-              color: Util.alpha(Color.accent, 0.16)
+          Flickable {
+            id: previewFlick
+            anchors.fill: parent
+            anchors.margins: Style.space(12)
+            contentWidth: width
+            contentHeight: previewCol.implicitHeight
+            clip: true
+            boundsBehavior: Flickable.StopAtBounds
+            flickableDirection: Flickable.VerticalFlick
+            interactive: contentHeight > height
 
-              Row {
-                id: chipRowInner
-                anchors.verticalCenter: parent.verticalCenter
-                anchors.left: parent.left
-                anchors.leftMargin: Style.space(8)
-                spacing: Style.space(4)
+            Column {
+              id: previewCol
+              width: previewFlick.width
+              spacing: Style.space(4)
 
-                Text {
-                  id: chipLabel
-                  textFormat: Text.PlainText
-                  text: AlfredModel.fileName(modelData)
-                  color: root.foreground
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
+              Item {
+                width: parent.width
+                height: Style.space(22)
+
+                Row {
+                  anchors.left: parent.left
                   anchors.verticalCenter: parent.verticalCenter
+                  spacing: Style.space(6)
+
+                  Text {
+                    textFormat: Text.PlainText
+                    text: Theme.glyph(root.awaitingPermission ? "lock" : "pulse")
+                    color: root.awaitingPermission ? Theme.moodYellow() : Color.accent
+                    font.family: menuCodicon.name !== "" ? menuCodicon.name : "codicon"
+                    font.pixelSize: Style.space(Theme.iconPx())
+                    anchors.verticalCenter: parent.verticalCenter
+
+                    SequentialAnimation on opacity {
+                      running: root.previewVisible && !root.awaitingPermission
+                      loops: Animation.Infinite
+                      alwaysRunToEnd: true
+                      NumberAnimation { from: 1; to: 0.35; duration: 700; easing.type: Easing.InOutSine }
+                      NumberAnimation { from: 0.35; to: 1; duration: 700; easing.type: Easing.InOutSine }
+                    }
+                  }
+
+                  Text {
+                    textFormat: Text.PlainText
+                    text: (root.awaitingPermission ? "WAITING FOR APPROVAL" : "LIVE")
+                      + (root.busyStartedAt > 0 ? " · " + AlfredModel.formatDuration(root.nowMs - root.busyStartedAt) : "")
+                    color: root.dim
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                    font.bold: true
+                    anchors.verticalCenter: parent.verticalCenter
+                  }
                 }
 
                 Text {
-                  textFormat: Text.PlainText
-                  text: Theme.glyph("close")
-                  color: chipClose.containsMouse ? Color.urgent : root.dim
-                  font.family: menuCodicon.name !== "" ? menuCodicon.name : "codicon"
-                  font.pixelSize: Style.space(12)
+                  anchors.right: parent.right
                   anchors.verticalCenter: parent.verticalCenter
-                  MouseArea {
-                    id: chipClose
-                    anchors.fill: parent
-                    anchors.margins: -4
-                    hoverEnabled: true
-                    cursorShape: Qt.PointingHandCursor
-                    preventStealing: true
-                    onClicked: root.removeAttachment(modelData)
+                  textFormat: Text.PlainText
+                  text: root.activity.length === 1 ? "1 step" : (root.activity.length + " steps")
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                }
+              }
+
+              Text {
+                visible: root.activity.length === 0 && root.liveText === ""
+                width: parent.width
+                textFormat: Text.PlainText
+                text: root.gatewayKind === "local" ? "Waiting for the first step…" : "Remote gateways only report the final reply."
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+              }
+
+              Repeater {
+                model: root.activity
+
+                Item {
+                  id: stepRow
+                  required property var modelData
+                  required property int index
+                  readonly property string status: String(modelData.status || "")
+                  readonly property color tint: status === "error" ? Theme.moodRed() : (status === "running" ? Color.accent : root.dim)
+                  width: previewCol.width
+                  height: stepText.implicitHeight + Style.space(8)
+
+                  Rectangle {
+                    visible: stepRow.index < root.activity.length - 1
+                    x: Style.space(7)
+                    y: Style.space(20)
+                    width: 1
+                    height: parent.height - Style.space(16)
+                    color: Util.alpha(root.dim, 0.35)
                   }
+
+                  Text {
+                    id: stepIcon
+                    x: 0
+                    y: Style.space(4)
+                    width: Style.space(15)
+                    horizontalAlignment: Text.AlignHCenter
+                    textFormat: Text.PlainText
+                    text: Theme.glyph(stepRow.status === "error" ? "error" : String(stepRow.modelData.icon || "tools"))
+                    color: stepRow.tint
+                    font.family: menuCodicon.name !== "" ? menuCodicon.name : "codicon"
+                    font.pixelSize: Style.space(Theme.iconPx())
+
+                    SequentialAnimation on opacity {
+                      running: stepRow.status === "running"
+                      loops: Animation.Infinite
+                      alwaysRunToEnd: true
+                      NumberAnimation { from: 1; to: 0.3; duration: 500; easing.type: Easing.InOutSine }
+                      NumberAnimation { from: 0.3; to: 1; duration: 500; easing.type: Easing.InOutSine }
+                    }
+                  }
+
+                  Column {
+                    id: stepText
+                    anchors.left: stepIcon.right
+                    anchors.leftMargin: Style.space(8)
+                    anchors.right: stepMeta.left
+                    anchors.rightMargin: Style.space(8)
+                    y: Style.space(3)
+                    spacing: 0
+
+                    Text {
+                      width: parent.width
+                      textFormat: Text.PlainText
+                      text: String(stepRow.modelData.name || "tool")
+                      elide: Text.ElideRight
+                      color: stepRow.status === "running" ? root.foreground : Util.alpha(root.foreground, 0.8)
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.caption
+                      font.bold: true
+                    }
+
+                    Text {
+                      visible: text !== ""
+                      width: parent.width
+                      textFormat: Text.PlainText
+                      text: String(stepRow.modelData.summary || "")
+                      elide: Text.ElideMiddle
+                      color: root.dim
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.caption
+                    }
+
+                    Text {
+                      visible: stepRow.status === "error" && text !== ""
+                      width: parent.width
+                      textFormat: Text.PlainText
+                      text: String(stepRow.modelData.output || "")
+                      wrapMode: Text.Wrap
+                      maximumLineCount: 2
+                      elide: Text.ElideRight
+                      color: Theme.moodRed()
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.caption
+                    }
+                  }
+
+                  Text {
+                    id: stepMeta
+                    anchors.right: parent.right
+                    y: Style.space(4)
+                    textFormat: Text.PlainText
+                    text: stepRow.status === "running"
+                      ? AlfredModel.formatDuration(Math.max(0, root.nowMs - Number(stepRow.modelData.startedAt || root.nowMs)))
+                      : AlfredModel.formatDuration(stepRow.modelData.durationMs)
+                    color: stepRow.tint
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                  }
+                }
+              }
+
+              Column {
+                visible: root.liveText !== ""
+                width: parent.width
+                spacing: Style.space(2)
+                topPadding: Style.space(4)
+
+                Text {
+                  textFormat: Text.PlainText
+                  text: "WRITING"
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  font.bold: true
+                }
+
+                Text {
+                  width: parent.width
+                  textFormat: Text.PlainText
+                  text: root.liveText
+                  wrapMode: Text.Wrap
+                  color: root.foreground
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
                 }
               }
             }
@@ -1474,10 +2591,43 @@ Item {
             flickableDirection: Flickable.VerticalFlick
             interactive: contentHeight > height
             pressDelay: 180
+            readonly property real distanceToEnd: contentHeight - height - contentY
+            onContentHeightChanged: {
+              if (root.followThread && !jumpAnim.running) contentY = Math.max(0, contentHeight - height)
+            }
+            onHeightChanged: {
+              if (root.followThread && !jumpAnim.running) contentY = Math.max(0, contentHeight - height)
+            }
+            onMovementEnded: root.updateFollowThread()
+            onContentYChanged: {
+              if (moving || bandScroll.pressed) root.updateFollowThread()
+            }
+
+            NumberAnimation {
+              id: jumpAnim
+              target: bandFlick
+              property: "contentY"
+              duration: 260
+              easing.type: Easing.OutCubic
+              onFinished: root.followThread = true
+            }
+
+            QQC.ScrollBar.vertical: QQC.ScrollBar {
+              id: bandScroll
+              policy: bandFlick.contentHeight > bandFlick.height ? QQC.ScrollBar.AlwaysOn : QQC.ScrollBar.AlwaysOff
+              width: Style.space(6)
+              padding: 0
+              background: Item {}
+              contentItem: Rectangle {
+                implicitWidth: Style.space(4)
+                radius: width / 2
+                color: Util.alpha(root.foreground, bandScroll.pressed ? 0.55 : (bandScroll.hovered ? 0.40 : 0.22))
+              }
+            }
 
             Column {
               id: bandColumn
-              width: bandFlick.width
+              width: bandFlick.width - Style.space(6)
               spacing: Style.space(8)
 
               TextEdit {
@@ -1580,15 +2730,73 @@ Item {
           }
         }
       }
+
+      Item {
+        id: jumpWrap
+        readonly property bool shown: root.showThread && bandFlick.interactive && bandFlick.distanceToEnd > Style.space(24)
+        width: parent.width
+        height: shown ? Style.space(36) : 0
+        clip: true
+        opacity: shown ? 1 : 0
+
+        Behavior on height {
+          NumberAnimation { duration: 160; easing.type: Easing.OutCubic }
+        }
+        Behavior on opacity {
+          NumberAnimation { duration: 160; easing.type: Easing.OutCubic }
+        }
+
+        Rectangle {
+          anchors.horizontalCenter: parent.horizontalCenter
+          anchors.bottom: parent.bottom
+          height: Style.space(28)
+          width: jumpInner.implicitWidth + Style.space(22)
+          radius: height / 2
+          color: jumpHit.containsMouse ? Qt.darker(root.sheet, 0.85) : root.sheet
+          border.width: 1
+          border.color: Util.alpha(Color.accent, jumpHit.containsMouse ? 0.45 : 0.22)
+
+          Row {
+            id: jumpInner
+            anchors.centerIn: parent
+            spacing: Style.space(6)
+
+            Text {
+              textFormat: Text.PlainText
+              text: Theme.glyph("arrow-down")
+              color: jumpHit.containsMouse ? root.foreground : root.dim
+              font.family: menuCodicon.name !== "" ? menuCodicon.name : "codicon"
+              font.pixelSize: Style.space(12)
+              anchors.verticalCenter: parent.verticalCenter
+            }
+
+            Text {
+              textFormat: Text.PlainText
+              text: "Jump to latest"
+              color: root.foreground
+              opacity: jumpHit.containsMouse ? 1 : 0.8
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              anchors.verticalCenter: parent.verticalCenter
+            }
+          }
+
+          MouseArea {
+            id: jumpHit
+            anchors.fill: parent
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            preventStealing: true
+            onPressed: function(mouse) { mouse.accepted = true }
+            onClicked: Qt.callLater(root.jumpThreadToEnd)
+          }
+        }
+      }
     }
     }
   }
 
-  onMessagesChanged: {
-    Qt.callLater(function() {
-      bandFlick.contentY = Math.max(0, bandFlick.contentHeight - bandFlick.height)
-    })
-  }
+  onMessagesChanged: Qt.callLater(root.scrollThreadToEnd)
 
   Component.onCompleted: {
     if (alfred && typeof alfred.refreshStatus === "function") alfred.refreshStatus()

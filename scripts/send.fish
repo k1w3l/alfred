@@ -44,8 +44,10 @@ if test -z "$hermes"
   exit 127
 end
 
-set -l session alfred
-if test (count $argv) -ge 1; and test -n "$argv[1]"
+# Session ref: "id:<session_id>" resumes by id, "" starts a fresh session,
+# anything else resumes (or creates) the session with that title.
+set -l session ""
+if test (count $argv) -ge 1
   set session $argv[1]
 end
 
@@ -132,7 +134,11 @@ if test "$kind" != local; and test -n "$url"
   end
   cd $HOME
   set -l profile_name (python3 $script_dir/alfred-profile.py name 2>/dev/null)
-  exec $py $script_dir/remote-send.py "$url" "$conn_id" "$session" "$prompt" "$reasoning" "$profile_name"
+  set -l remote_title (string replace -r '^id:' '' -- $session)
+  if test -z "$remote_title"
+    set remote_title alfred
+  end
+  exec $py $script_dir/remote-send.py "$url" "$conn_id" "$remote_title" "$prompt" "$reasoning" "$profile_name"
 end
 
 set -l reasoning_args
@@ -146,8 +152,14 @@ set -l profile_name (python3 $script_dir/alfred-profile.py name 2>/dev/null)
 if test -n "$profile_name"; and test "$profile_name" != default
   set profile_args -p $profile_name
 end
-exec $hermes $profile_args chat -Q --oneshot --accept-hooks \
-  -c "$session" --create-if-missing \
+set -l session_args
+if string match -q 'id:*' -- $session
+  set session_args --resume (string replace -r '^id:' '' -- $session)
+else if test -n "$session"
+  set session_args -c "$session" --create-if-missing
+end
+exec $hermes $profile_args chat --format stream-json --oneshot --accept-hooks \
+  $session_args \
   --source alfred \
   $reasoning_args \
   -q "$prompt"

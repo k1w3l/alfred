@@ -16,6 +16,8 @@ Item {
   property bool running: false
   property color accent: Color.foreground
   property real ringWidth: 2
+  // Corner radius of the surface the ring hugs; values >= height/2 give a stadium.
+  property real radius: height / 2
 
   visible: running
   enabled: false
@@ -36,37 +38,46 @@ Item {
   readonly property real span: (Math.abs(boxW * dx) + Math.abs(boxH * dy)) / 2
   readonly property real gcx: ox + boxW / 2
   readonly property real gcy: oy + boxH / 2
-  readonly property string ringPath: root.running ? stadiumRing(width, height, ringWidth) : ""
+  readonly property string ringPath: root.running ? roundedRing(width, height, ringWidth, radius) : ""
 
-  function stadiumLoop(w, h, inset, clockwise) {
-    var r = Math.max(0.5, h / 2 - inset)
-    var x1 = inset + r
-    var x2 = Math.max(x1, w - inset - r)
-    var y1 = inset
-    var y2 = h - inset
+  function roundedLoop(w, h, inset, radius, clockwise) {
+    var r = Math.max(0.5, Math.min(radius - inset, h / 2 - inset, w / 2 - inset))
+    var l = inset
+    var t = inset
+    var rt = w - inset
+    var b = h - inset
     var rs = r + " " + r
     if (clockwise) {
-      return "M " + x1 + " " + y1
-        + " L " + x2 + " " + y1
-        + " A " + rs + " 0 0 1 " + x2 + " " + y2
-        + " L " + x1 + " " + y2
-        + " A " + rs + " 0 0 1 " + x1 + " " + y1
+      return "M " + (l + r) + " " + t
+        + " L " + (rt - r) + " " + t
+        + " A " + rs + " 0 0 1 " + rt + " " + (t + r)
+        + " L " + rt + " " + (b - r)
+        + " A " + rs + " 0 0 1 " + (rt - r) + " " + b
+        + " L " + (l + r) + " " + b
+        + " A " + rs + " 0 0 1 " + l + " " + (b - r)
+        + " L " + l + " " + (t + r)
+        + " A " + rs + " 0 0 1 " + (l + r) + " " + t
         + " Z"
     }
-    return "M " + x1 + " " + y1
-      + " A " + rs + " 0 0 0 " + x1 + " " + y2
-      + " L " + x2 + " " + y2
-      + " A " + rs + " 0 0 0 " + x2 + " " + y1
-      + " L " + x1 + " " + y1
+    return "M " + (l + r) + " " + t
+      + " A " + rs + " 0 0 0 " + l + " " + (t + r)
+      + " L " + l + " " + (b - r)
+      + " A " + rs + " 0 0 0 " + (l + r) + " " + b
+      + " L " + (rt - r) + " " + b
+      + " A " + rs + " 0 0 0 " + rt + " " + (b - r)
+      + " L " + rt + " " + (t + r)
+      + " A " + rs + " 0 0 0 " + (rt - r) + " " + t
+      + " L " + (l + r) + " " + t
       + " Z"
   }
 
-  function stadiumRing(w, h, rw) {
+  function roundedRing(w, h, rw, radius) {
     if (!isFinite(w) || !isFinite(h) || w < 8 || h < 8) return ""
     var outer = 0.5
     var inner = outer + Math.max(1, rw)
     if (inner >= h / 2 - 0.5) inner = h / 2 - 1
-    return stadiumLoop(w, h, outer, true) + " " + stadiumLoop(w, h, inner, false)
+    var r = Math.max(1, Math.min(isFinite(radius) ? radius : h / 2, h / 2))
+    return roundedLoop(w, h, outer, r, true) + " " + roundedLoop(w, h, inner, r, false)
   }
 
   onRunningChanged: {

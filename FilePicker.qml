@@ -75,7 +75,7 @@ Rectangle {
   function confirm() {
     if (root.folderMode) {
       var current = root.folderPath
-      if (current !== "") root.accepted([current])
+      if (current !== "") root.accepted([current.replace(/\/?$/, "/")])
       return
     }
     if (root.selected.length > 0) root.accepted(root.selected.slice())

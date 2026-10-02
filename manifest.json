@@ -2,11 +2,11 @@
   "schemaVersion": 1,
   "id": "kiwel.alfred",
   "name": "Alfred",
-  "version": "1.3.1",
+  "version": "1.5.0",
   "author": "kiwel",
   "license": "MIT",
   "homepage": "https://github.com/k1w3l/alfred",
-  "description": "Spotlight-style HUD for Hermes Agent on Omarchy. Model, effort, profiles, and Desktop gateways in one pill.",
+  "description": "Spotlight-style HUD for Hermes Agent on Omarchy. Multiple chats, session history, live preview, and Hermes settings in one pill.",
   "kinds": ["service", "overlay", "bar-widget"],
   "keepLoaded": true,
   "entryPoints": {

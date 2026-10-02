@@ -40,28 +40,63 @@ omarchy bar move kiwel.alfred --section right
 - Right-click the bar icon opens Hermes Desktop (when installed).
 - Middle-click hides the overlay.
 - While the pill has focus, click outside to shrink it to a ball; hover or click the ball to open it again.
-- `+` attaches files, folders, or images through an in-overlay browser (Wayland layer-shell cannot host the native Desktop dialog above the HUD).
-- The **model** control switches `model.default` for the current Hermes provider.
-- The **effort** control (next to model) sets `agent.reasoning_effort` (`none` … `ultra`).
-- The **profile** control lists Hermes profiles (`hermes profile list`) and runs `hermes profile use` sticky; local sends use `hermes -p <name>`.
-- The **gateway** control lists connections from Hermes Desktop (`~/.config/Hermes/connections.json`). Choose **This device** for the local CLI, or a remote entry to send through that dashboard.
+- `+` attaches files, folders, or images through an in-overlay browser (Wayland layer-shell cannot host the native Desktop dialog above the HUD). The `+` button shows a badge with the attachment count, and each attachment appears as a chip under the pill with its type icon and an X to remove it; **Clear all** drops every one.
+- The composer grows as you type (up to about eight lines, then scrolls). Enter sends, Shift+Enter adds a line.
+- The gear dropdown (labelled with the current model and effort) groups every setting:
+  - **Model** switches `model.default` for the current Hermes provider.
+  - **Reasoning** sets `agent.reasoning_effort` (`none` … `ultra`).
+  - **Profile** lists Hermes profiles (`hermes profile list`) and runs `hermes profile use` sticky; local sends use `hermes -p <name>`.
+  - **Keyboard shortcuts** rebinds the global Hyprland keys and the keys inside the pill. Click a shortcut, press the new combination (Escape cancels, Backspace turns it off); the reset icon restores the default.
+  - **Gateway** lists connections from Hermes Desktop (`~/.config/Hermes/connections.json`). Choose **This device** for the local CLI, or a remote entry to send through that dashboard.
+- Under the pill, **New chat** and **Previous sessions** sit side by side. Previous sessions lists recent sessions from the active profile's `state.db` (cron runs hidden); picking one opens it as a chat and resumes it with `hermes chat --resume`.
+- Several chats can run at once, each in its own Hermes session. With more than one chat, chips next to those buttons switch or close them; a pulsing dot marks a chat that is still working.
+- While a chat is working, the eye button opens a live preview: each tool call with its target and duration, plus the reply as it streams (`hermes chat --format stream-json`). Remote gateways only report the final reply.
+- Long conversations scroll inside the thread (mouse wheel, scrollbar, or PageUp/PageDown from the composer). When you are not at the bottom, **Jump to latest** appears under the thread.
 - The microphone records a clip with `pw-record` and transcribes it into the composer.
-- Escape hides the pill when idle. While a reply is in flight, Escape shrinks to the ball so the travelling arc stays visible.
+- Escape hides the pill when idle. While a reply is in flight, Escape shrinks to the ball so the travelling arc stays visible. Inside a submenu, Escape goes back one level.
+
+Default shortcuts (change them in the gear dropdown under **Keyboard shortcuts**):
+
+| Keys | Where | Action |
+| --- | --- | --- |
+| Super+H | Global | Show / hide Alfred |
+| Super+Alt+H | Global | Start / stop voice capture |
+| Ctrl+M | Pill | Start / stop voice capture |
+| Ctrl+N | Pill | New chat |
+| Ctrl+W | Pill | Close the current chat |
+| Ctrl+Tab / Ctrl+Shift+Tab | Pill | Next / previous chat |
+| Ctrl+H | Pill | Previous sessions |
+| Ctrl+P | Pill | Toggle the live preview (while working) |
+
+Global keys are written to `~/.config/hypr/alfred.lua` and applied with `hyprctl reload`. Load that file once from your Hyprland bindings:
+
+```lua
+pcall(require, "hypr.alfred")
+```
+
+Remove any older hardcoded Alfred bind for the same keys. Pill shortcuts are stored in `~/.config/Hermes/alfred.json`. Without the hook, the dropdown shows a warning and only the pill shortcuts apply.
 
 ```fish
 omarchy-shell kiwel.alfred toggle
 omarchy-shell kiwel.alfred focus
 omarchy-shell kiwel.alfred hide
 omarchy-shell kiwel.alfred send "status"
+omarchy-shell kiwel.alfred newchat
+omarchy-shell kiwel.alfred voice
+omarchy-shell kiwel.alfred attach ~/notes.md
+omarchy-shell kiwel.alfred resume 20260923_025333_31e917
+omarchy-shell kiwel.alfred menu shortcuts
 omarchy-shell shell summon kiwel.alfred '{}'
 omarchy-shell shell hide kiwel.alfred
 ```
 
-Bind a key in Hyprland (or your compositor) to `omarchy-shell kiwel.alfred toggle` if you want a global shortcut.
+`menu` accepts `settings`, `sessions`, `attach`, `model`, `effort`, `profile`, `gateway`, or `shortcuts`. On other compositors, bind keys to these commands yourself.
 
 ## Configure
 
-The named Hermes session defaults to `alfred` (`-c`). Change `sessionName` on the bar widget entry in `~/.config/omarchy/shell.json`.
+The first chat uses the named Hermes session `alfred` (`-c`). Change `sessionName` on the bar widget entry in `~/.config/omarchy/shell.json`. New chats start fresh sessions and keep resuming them by id.
+
+Hermes allows one writer per session: resuming a session that is still open in Hermes Desktop or another terminal fails with `SESSION_NOT_OWNED`. Close it there, or start a new chat.
 
 ### Remote gateways
 

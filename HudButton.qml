@@ -18,6 +18,7 @@ Rectangle {
   property bool opened: false
   property bool wide: false
   property bool compact: false
+  property int badge: 0
 
   signal clicked()
   signal rightClicked()
@@ -135,6 +136,32 @@ Rectangle {
       font.family: codiconFont.name !== "" ? codiconFont.name : "codicon"
       font.pixelSize: Math.max(10, Math.round(root.glyphPx * 0.72))
       anchors.verticalCenter: parent.verticalCenter
+    }
+  }
+
+  Rectangle {
+    visible: root.badge > 0
+    z: 2
+    width: Math.max(height, badgeText.implicitWidth + Style.space(6))
+    height: Style.space(14)
+    radius: height / 2
+    color: Color.accent
+    border.width: 1
+    border.color: Color.background
+    anchors.right: parent.right
+    anchors.top: parent.top
+    anchors.rightMargin: -Style.space(4)
+    anchors.topMargin: -Style.space(4)
+
+    Text {
+      id: badgeText
+      anchors.centerIn: parent
+      textFormat: Text.PlainText
+      text: root.badge > 9 ? "9+" : String(root.badge)
+      color: Color.background
+      font.family: Style.font.family
+      font.pixelSize: Math.max(9, Style.space(9))
+      font.bold: true
     }
   }
 

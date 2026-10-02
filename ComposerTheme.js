@@ -43,6 +43,10 @@ function inputMinPx() {
   return 128
 }
 
+function composerMaxPx() {
+  return 168
+}
+
 function glyph(name) {
   var map = {
     "add": "\uEA60",
@@ -67,7 +71,28 @@ function glyph(name) {
     "plug": "\uEB55",
     "server": "\uEA99",
     "account": "\uEB99",
-    "person": "\uEA67"
+    "person": "\uEA67",
+    "history": "\uEA82",
+    "settings-gear": "\uEB51",
+    "chevron-left": "\uEAB5",
+    "chevron-right": "\uEAB6",
+    "eye": "\uEA70",
+    "eye-closed": "\uEAE7",
+    "comment-discussion": "\uEAC7",
+    "tools": "\uEB6D",
+    "terminal": "\uEA85",
+    "circle-filled": "\uEA71",
+    "search": "\uEA6D",
+    "globe": "\uEB01",
+    "edit": "\uEA73",
+    "file-code": "\uEAE9",
+    "list-unordered": "\uEB17",
+    "pulse": "\uEB31",
+    "arrow-down": "\uEA9A",
+    "keyboard": "\uEA65",
+    "clear-all": "\uEABF",
+    "file-pdf": "\uEAEB",
+    "file-zip": "\uEAEF"
   }
   return map[String(name || "")] || ""
 }

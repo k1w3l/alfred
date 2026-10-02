@@ -65,8 +65,10 @@ function clipMessages(messages, limit) {
   return list
 }
 
+var MESSAGE_CAP = 200
+
 function appendMessage(messages, role, text) {
-  var next = clipMessages(messages, 40)
+  var next = clipMessages(messages, MESSAGE_CAP - 1)
   next.push({
     role: String(role || "assistant"),
     text: String(text || "")
@@ -83,7 +85,7 @@ function previewText(text, max) {
 }
 
 function fileName(path) {
-  var value = String(path || "")
+  var value = String(path || "").replace(/\/+$/, "")
   var parts = value.split("/")
   return parts.length ? parts[parts.length - 1] : value
 }
@@ -243,6 +245,233 @@ function parseProfiles(raw) {
   } catch (e) {
     return empty
   }
+}
+
+function parseStreamEvent(line) {
+  var text = String(line || "").trim()
+  if (text === "" || text.charAt(0) !== "{") return null
+  try {
+    var parsed = JSON.parse(text)
+    if (parsed && typeof parsed === "object" && typeof parsed.type === "string") return parsed
+  } catch (e) {
+  }
+  return null
+}
+
+function toolSummary(name, input) {
+  var args = input && typeof input === "object" ? input : {}
+  var keys = ["command", "cmd", "path", "file_path", "file", "query", "url", "name", "pattern", "skill", "goal", "task"]
+  var i
+  for (i = 0; i < keys.length; i++) {
+    var v = args[keys[i]]
+    if (typeof v === "string" && v.trim() !== "") return previewText(v, 96)
+  }
+  for (var k in args) {
+    if (typeof args[k] === "string" && args[k].trim() !== "") return previewText(args[k], 96)
+  }
+  return ""
+}
+
+function toolIcon(name) {
+  var n = String(name || "").toLowerCase()
+  if (/terminal|shell|bash|exec|command|process/.test(n)) return "terminal"
+  if (/search|grep|find/.test(n)) return "search"
+  if (/web|browser|http|fetch|url/.test(n)) return "globe"
+  if (/write|edit|patch|replace/.test(n)) return "edit"
+  if (/read|file|view|skill/.test(n)) return "file-code"
+  if (/todo|plan|list/.test(n)) return "list-unordered"
+  return "tools"
+}
+
+function formatDuration(ms) {
+  var value = Number(ms)
+  if (!isFinite(value) || value < 0) return ""
+  if (value < 1000) return Math.round(value) + "ms"
+  var s = value / 1000
+  if (s < 60) return (s < 10 ? s.toFixed(1) : Math.round(s)) + "s"
+  var m = Math.floor(s / 60)
+  return m + "m" + (Math.round(s % 60) < 10 ? "0" : "") + Math.round(s % 60) + "s"
+}
+
+function chatTitle(prompt) {
+  var value = previewText(prompt, 28)
+  return value !== "" ? value : "New chat"
+}
+
+function parseSessions(raw) {
+  var text = String(raw || "").trim()
+  var empty = { ok: false, sessions: [], error: "" }
+  if (text === "") return empty
+  try {
+    var parsed = JSON.parse(text)
+    if (!parsed || typeof parsed !== "object") return empty
+    var rows = Array.isArray(parsed.sessions) ? parsed.sessions : []
+    var list = []
+    var i
+    for (i = 0; i < rows.length; i++) {
+      var row = rows[i]
+      if (!row || typeof row !== "object" || !row.id) continue
+      list.push({
+        id: String(row.id),
+        title: String(row.title || row.id),
+        preview: String(row.preview || ""),
+        source: String(row.source || ""),
+        lastActive: String(row.lastActive || ""),
+        messageCount: Number(row.messageCount || 0)
+      })
+    }
+    return { ok: parsed.ok !== false, sessions: list, error: String(parsed.error || "") }
+  } catch (e) {
+    return empty
+  }
+}
+
+function parseSessionLoad(raw) {
+  var text = String(raw || "").trim()
+  var empty = { ok: false, id: "", title: "", messages: [], error: "bad session json" }
+  if (text === "") return empty
+  try {
+    var parsed = JSON.parse(text)
+    if (!parsed || typeof parsed !== "object") return empty
+    var rows = Array.isArray(parsed.messages) ? parsed.messages : []
+    var list = []
+    var i
+    for (i = 0; i < rows.length; i++) {
+      var row = rows[i]
+      if (!row || typeof row !== "object") continue
+      list.push({ role: String(row.role || "assistant"), text: String(row.text || "") })
+    }
+    return {
+      ok: parsed.ok !== false,
+      id: String(parsed.id || ""),
+      title: String(parsed.title || ""),
+      messages: clipMessages(list, MESSAGE_CAP),
+      error: String(parsed.error || "")
+    }
+  } catch (e) {
+    return empty
+  }
+}
+
+// Qt key codes / modifier masks (Qt::Key, Qt::KeyboardModifier).
+var KEY_NAMES = {
+  0x01000001: "Tab", 0x01000002: "Tab", 0x01000003: "Backspace", 0x01000004: "Return",
+  0x01000005: "Return", 0x01000006: "Insert", 0x01000007: "Delete", 0x01000010: "Home",
+  0x01000011: "End", 0x01000012: "Left", 0x01000013: "Up", 0x01000014: "Right",
+  0x01000015: "Down", 0x01000016: "PageUp", 0x01000017: "PageDown", 0x20: "Space",
+  0x2c: "Comma", 0x2e: "Period", 0x2f: "Slash", 0x2d: "Minus", 0x3d: "Equal",
+  0x3b: "Semicolon", 0x27: "Apostrophe", 0x5b: "BracketLeft", 0x5d: "BracketRight",
+  0x5c: "Backslash", 0x60: "Grave"
+}
+var MODIFIER_KEYS = [0x01000020, 0x01000021, 0x01000022, 0x01000023, 0x01001103, 0x01000053, 0x01000054]
+var HYPR_KEYS = {
+  Tab: "Tab", Backspace: "BackSpace", Return: "Return", Insert: "Insert", Delete: "Delete",
+  Home: "Home", End: "End", Left: "left", Up: "up", Right: "right", Down: "down",
+  PageUp: "Prior", PageDown: "Next", Space: "space", Comma: "comma", Period: "period",
+  Slash: "slash", Minus: "minus", Equal: "equal", Semicolon: "semicolon",
+  Apostrophe: "apostrophe", BracketLeft: "bracketleft", BracketRight: "bracketright",
+  Backslash: "backslash", Grave: "grave"
+}
+
+function isModifierKey(key) {
+  return MODIFIER_KEYS.indexOf(Number(key)) >= 0
+}
+
+function keyName(key) {
+  var k = Number(key)
+  if (k >= 0x41 && k <= 0x5a) return String.fromCharCode(k)
+  if (k >= 0x30 && k <= 0x39) return String.fromCharCode(k)
+  if (k >= 0x01000030 && k <= 0x0100003b) return "F" + (k - 0x01000030 + 1)
+  return KEY_NAMES[k] || ""
+}
+
+// Returns { mods: [...], key: "N" } or null for bare modifier presses / unknown keys.
+function comboFromEvent(key, modifiers) {
+  if (isModifierKey(key)) return null
+  var name = keyName(key)
+  if (name === "") return null
+  var m = Number(modifiers)
+  var mods = []
+  if (m & 0x04000000) mods.push("Ctrl")
+  if (m & 0x02000000) mods.push("Shift")
+  if (m & 0x08000000) mods.push("Alt")
+  if (m & 0x10000000) mods.push("Super")
+  return { mods: mods, key: name }
+}
+
+function comboText(combo) {
+  if (!combo) return ""
+  return combo.mods.concat([combo.key]).join("+")
+}
+
+function comboHypr(combo) {
+  if (!combo) return ""
+  var map = { Ctrl: "CTRL", Shift: "SHIFT", Alt: "ALT", Super: "SUPER" }
+  var order = ["Super", "Ctrl", "Shift", "Alt"]
+  var parts = []
+  for (var i = 0; i < order.length; i++) {
+    if (combo.mods.indexOf(order[i]) >= 0) parts.push(map[order[i]])
+  }
+  parts.push(HYPR_KEYS[combo.key] || combo.key)
+  return parts.join(" + ")
+}
+
+function normalizeCombo(text) {
+  var parts = String(text || "").split("+").map(function(p) { return p.trim() }).filter(function(p) { return p !== "" })
+  if (parts.length === 0) return ""
+  var key = parts.pop()
+  var mods = []
+  var order = ["Ctrl", "Shift", "Alt", "Super"]
+  for (var i = 0; i < order.length; i++) {
+    for (var j = 0; j < parts.length; j++) {
+      if (parts[j].toLowerCase() === order[i].toLowerCase()) mods.push(order[i])
+    }
+  }
+  return mods.concat([key.length === 1 ? key.toUpperCase() : key]).join("+")
+}
+
+function parseShortcuts(raw) {
+  var empty = { ok: false, error: "", hooked: false, global: [], local: [] }
+  var text = String(raw || "").trim()
+  if (text === "") return empty
+  try {
+    var parsed = JSON.parse(text)
+    if (!parsed || typeof parsed !== "object") return empty
+    function rows(list) {
+      var out = []
+      var src = Array.isArray(list) ? list : []
+      for (var i = 0; i < src.length; i++) {
+        if (!src[i] || !src[i].id) continue
+        out.push({
+          id: String(src[i].id),
+          label: String(src[i].label || src[i].id),
+          keys: String(src[i].keys || ""),
+          defaultKeys: String(src[i]["default"] || "")
+        })
+      }
+      return out
+    }
+    return {
+      ok: parsed.ok !== false,
+      error: String(parsed.error || ""),
+      hooked: parsed.hooked === true,
+      global: rows(parsed.global),
+      local: rows(parsed.local)
+    }
+  } catch (e) {
+    return empty
+  }
+}
+
+function attachmentIcon(path) {
+  var p = String(path || "").toLowerCase()
+  if (/\/$/.test(p)) return "folder"
+  if (/\.(png|jpe?g|gif|webp|bmp|svg|heic|avif|tiff?)$/.test(p)) return "file-media"
+  if (/\.pdf$/.test(p)) return "file-pdf"
+  if (/\.(zip|tar|gz|tgz|xz|7z|rar|zst)$/.test(p)) return "file-zip"
+  if (/\.(wav|mp3|ogg|flac|m4a|opus)$/.test(p)) return "mic"
+  if (/\.(js|ts|tsx|py|qml|fish|sh|rs|go|c|cpp|h|java|kt|lua|json|ya?ml|toml|md|html|css)$/.test(p)) return "file-code"
+  return "file"
 }
 
 function looksLikePermission(text) {
