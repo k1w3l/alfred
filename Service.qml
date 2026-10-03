@@ -50,7 +50,15 @@ Item {
   property var gatewayOptions: []
   property string profileName: "default"
   property string profileLabel: "default"
+  property string profileKey: "local:default"
+  property string profileShape: "cercle"
+  property string profileFill: "#0a0a0c"
+  property string profileExpression: "neutre"
+  property int profileIdle: 0
+  property real profilePhase: 0
+  property string profileEyes: "soft"
   property var profileOptions: []
+  property var roster: []
   property bool pickingFiles: false
   property bool transcribing: false
   property bool awaitingPermission: false
@@ -71,6 +79,10 @@ Item {
   // Per-chat stream buffers and Process handles; mutated in place, flushed into `chats` by flushTimer.
   property var runtime: ({})
   property var runners: ({})
+  // Prompt typed while an agent switch is still running; sent once the new gateway+profile is active.
+  property var pendingSend: null
+  property string pendingProfileKey: ""
+  property int rosterSeq: 0
   property var sessionOptions: []
   property bool sessionsLoading: false
   property string sessionsError: ""
@@ -110,6 +122,8 @@ Item {
       id: "chat" + root.chatSeq,
       title: String(title || "New chat"),
       sessionRef: String(sessionRef || ""),
+      // Roster key (gateway:profile) that issued an "id:" sessionRef; ids never cross agents.
+      sessionScope: "",
       messages: [],
       busy: false,
       lastError: "",
@@ -231,19 +245,27 @@ Item {
     root.syncBusy()
   }
 
-  function sendPrompt(text) {
+  function sendPrompt(text, targetId) {
     root.ensureChat()
-    var chat = root.activeChat()
+    var targetIdx = targetId ? root.chatIndex(targetId) : -1
+    var chat = targetIdx >= 0 ? root.chats[targetIdx] : root.activeChat()
     var prompt = String(text || "").trim()
     if (prompt === "" && root.attachments.length === 0) return false
     if (chat.busy) {
       root.setActiveError("This chat is still answering. Open a new chat (Ctrl+N) for another task.")
       return false
     }
+    if (setRosterProcess.running) {
+      root.pendingSend = { chatId: chat.id, text: prompt, attachments: root.attachments.slice() }
+      attachments = []
+      return true
+    }
     if (prompt === "") prompt = "Use the attached files as context."
     var id = chat.id
+    var sessionRef = AlfredModel.scopedSessionRef(chat.sessionRef, chat.sessionScope, root.profileKey)
     root.runtime[id] = {
       out: "", err: "", text: "", result: "", resultError: "", sessionId: "",
+      scope: root.profileKey,
       activity: [], permission: false, aborting: false, dirty: false
     }
     var patch = {
@@ -259,7 +281,7 @@ Item {
     }
     if (chat.title === "New chat") patch.title = AlfredModel.chatTitle(prompt)
     root.patchChat(id, patch)
-    var cmd = ["fish", "--no-config", root.pluginDir + "/scripts/send.fish", chat.sessionRef, prompt]
+    var cmd = ["fish", "--no-config", root.pluginDir + "/scripts/send.fish", sessionRef, prompt]
     for (var i = 0; i < root.attachments.length; i++) cmd.push(root.attachments[i])
     var runner = sendRunner.createObject(root, { chatId: id, command: cmd })
     root.runners[id] = runner
@@ -267,6 +289,14 @@ Item {
     attachments = []
     flushTimer.start()
     return true
+  }
+
+  function flushPendingSend() {
+    var pending = root.pendingSend
+    root.pendingSend = null
+    if (!pending || root.chatIndex(pending.chatId) < 0) return
+    attachments = pending.attachments
+    root.sendPrompt(pending.text, pending.chatId)
   }
 
   function ingestSendLine(id, line, fromStderr) {
@@ -455,9 +485,10 @@ Item {
     var target = ""
     if (cur && !cur.busy && cur.messages.length === 0) {
       target = cur.id
-      root.patchChat(target, { sessionRef: ref, title: label, lastError: "", lastOutcome: "" })
+      root.patchChat(target, { sessionRef: ref, sessionScope: root.profileKey, title: label, lastError: "", lastOutcome: "" })
     } else {
       var c = root.makeChat(ref, label)
+      c.sessionScope = root.profileKey
       root.chats = root.chats.concat([c])
       root.activeChatId = c.id
       root.syncActive()
@@ -515,12 +546,18 @@ Item {
   function refreshGateways() {
     if (gatewaysProcess.running) return
     gatewaysProcess.command = ["fish", "--no-config", root.pluginDir + "/scripts/gateways.fish", "list"]
+    gatewaysProcess.startedSeq = root.rosterSeq
     gatewaysProcess.running = true
   }
 
   function setGateway(id) {
     var value = String(id || "").trim()
-    if (value === "" || setGatewayProcess.running) return false
+    if (value === "") return false
+    // Gateway and profile move together: pick the same profile on the new gateway, else its default.
+    var key = AlfredModel.rosterKeyForGateway(root.roster, value, root.profileName)
+    if (key !== "") return root.selectProfile(key)
+    if (setGatewayProcess.running) return false
+    root.rosterSeq += 1
     gatewayConnectionId = value
     setGatewayProcess.command = ["fish", "--no-config", root.pluginDir + "/scripts/gateways.fish", "set", value]
     setGatewayProcess.running = true
@@ -547,27 +584,58 @@ Item {
   }
 
   function refreshProfiles() {
-    if (profilesProcess.running) return
-    profilesProcess.command = ["fish", "--no-config", root.pluginDir + "/scripts/profiles.fish", "list"]
-    profilesProcess.running = true
+    root.refreshRoster()
+  }
+
+  function refreshRoster() {
+    if (rosterProcess.running || setRosterProcess.running) return
+    rosterProcess.command = ["fish", "--no-config", root.pluginDir + "/scripts/roster.fish", "list"]
+    rosterProcess.startedSeq = root.rosterSeq
+    rosterProcess.running = true
   }
 
   function setProfile(id) {
-    var value = String(id || "").trim()
-    if (value === "" || setProfileProcess.running) return false
-    profileName = value
-    setProfileProcess.command = ["fish", "--no-config", root.pluginDir + "/scripts/profiles.fish", "set", value]
-    setProfileProcess.running = true
+    return root.selectProfile(id)
+  }
+
+  function selectProfile(key) {
+    var value = String(key || "").trim()
+    if (value === "") return false
+    if (setRosterProcess.running) {
+      root.pendingProfileKey = value
+      return true
+    }
+    root.rosterSeq += 1
+    setRosterProcess.command = ["fish", "--no-config", root.pluginDir + "/scripts/roster.fish", "set", value]
+    setRosterProcess.running = true
     return true
   }
 
-  function applyProfiles(raw) {
-    var parsed = AlfredModel.parseProfiles(raw)
-    if (parsed.current !== "") profileName = parsed.current
+  function applyRoster(raw) {
+    var parsed = AlfredModel.parseRoster(raw)
+    if (!parsed.ok) return
+    if (parsed.profiles.length > 0) {
+      roster = parsed.profiles
+      profileOptions = parsed.profiles
+    }
+    if (parsed.current !== "") profileKey = parsed.current
+    if (parsed.profileName !== "") profileName = parsed.profileName
     if (parsed.label !== "") profileLabel = parsed.label
-    if (parsed.profiles.length > 0) profileOptions = parsed.profiles
+    if (parsed.gatewayId !== "") gatewayConnectionId = parsed.gatewayId
+    if (parsed.gatewayLabel !== "") gatewayLabel = parsed.gatewayLabel
+    if (parsed.gatewayKind !== "") gatewayKind = parsed.gatewayKind
+    if (parsed.shape !== "") profileShape = parsed.shape
+    if (parsed.fill !== "") profileFill = parsed.fill
+    if (parsed.expression !== "") profileExpression = parsed.expression
+    profileIdle = parsed.idle
+    profilePhase = parsed.phase
+    if (parsed.eyes !== "") profileEyes = parsed.eyes
     if (parsed.model !== "") modelName = parsed.model
-    if (parsed.provider !== "") modelProvider = parsed.provider
+    if (parsed.bindsChanged) root.refreshShortcuts()
+  }
+
+  function applyProfiles(raw) {
+    root.applyRoster(raw)
   }
 
   function afterProfileChange() {
@@ -725,7 +793,10 @@ Item {
     }
     var chat = root.chats[idx]
     var patch = { busy: false, awaitingPermission: false, liveText: "" }
-    if (rt.sessionId !== "") patch.sessionRef = "id:" + rt.sessionId
+    if (rt.sessionId !== "") {
+      patch.sessionRef = "id:" + rt.sessionId
+      patch.sessionScope = rt.scope
+    }
     if (rt.aborting) {
       patch.lastError = ""
       patch.lastOutcome = ""
@@ -790,7 +861,19 @@ Item {
       root.requestFocus()
       return "ok"
     }
+    function profile(key: string): string {
+      root.selectProfile(key)
+      return root.profileKey
+    }
     function chats(): string { return String(root.chats.length) }
+    function last(): string {
+      var c = root.activeChat()
+      return JSON.stringify({
+        profileKey: root.profileKey, gateway: root.gatewayConnectionId, gatewayUrl: root.gatewayUrl,
+        busy: c ? c.busy === true : false, sessionRef: c ? c.sessionRef : "", sessionScope: c ? c.sessionScope : "",
+        lastReply: c ? AlfredModel.previewText(c.lastReply, 240) : "", lastError: c ? String(c.lastError || "") : ""
+      })
+    }
     function ping(): string { return "ok" }
     function state(): string {
       if (!root.hudOpen) return "hidden"
@@ -1094,6 +1177,7 @@ Item {
 
   Process {
     id: gatewaysProcess
+    property int startedSeq: 0
     running: false
     stdout: StdioCollector {
       id: gatewaysOut
@@ -1101,6 +1185,10 @@ Item {
     }
     stderr: StdioCollector { waitForEnd: true }
     onExited: function() {
+      if (gatewaysProcess.startedSeq !== root.rosterSeq) {
+        Qt.callLater(root.refreshGateways)
+        return
+      }
       root.applyGateways(gatewaysOut.text)
     }
   }
@@ -1116,34 +1204,54 @@ Item {
     onExited: function() {
       root.applyGateways(setGatewayOut.text)
       root.refreshStatus()
-    }
-  }
-
-  Process {
-    id: profilesProcess
-    running: false
-    stdout: StdioCollector {
-      id: profilesOut
-      waitForEnd: true
-    }
-    stderr: StdioCollector { waitForEnd: true }
-    onExited: function() {
-      root.applyProfiles(profilesOut.text)
-    }
-  }
-
-  Process {
-    id: setProfileProcess
-    running: false
-    stdout: StdioCollector {
-      id: setProfileOut
-      waitForEnd: true
-    }
-    stderr: StdioCollector { waitForEnd: true }
-    onExited: function() {
-      root.applyProfiles(setProfileOut.text)
+      root.refreshRoster()
       root.afterProfileChange()
     }
+  }
+
+  Process {
+    id: rosterProcess
+    property int startedSeq: 0
+    running: false
+    stdout: StdioCollector {
+      id: rosterOut
+      waitForEnd: true
+    }
+    stderr: StdioCollector { waitForEnd: true }
+    onExited: function() {
+      if (rosterProcess.startedSeq !== root.rosterSeq) return
+      root.applyRoster(rosterOut.text)
+    }
+  }
+
+  Process {
+    id: setRosterProcess
+    running: false
+    stdout: StdioCollector {
+      id: setRosterOut
+      waitForEnd: true
+    }
+    stderr: StdioCollector { waitForEnd: true }
+    onExited: function() {
+      root.applyRoster(setRosterOut.text)
+      var next = root.pendingProfileKey
+      root.pendingProfileKey = ""
+      if (next !== "" && next !== root.profileKey) {
+        Qt.callLater(function() { root.selectProfile(next) })
+        return
+      }
+      root.refreshStatus()
+      root.refreshGateways()
+      root.afterProfileChange()
+      root.flushPendingSend()
+    }
+  }
+
+  Timer {
+    interval: 60000
+    running: true
+    repeat: true
+    onTriggered: root.refreshRoster()
   }
 
   Process {

@@ -41,7 +41,15 @@ Item {
   readonly property var gatewayOptions: alfred && alfred.gatewayOptions ? alfred.gatewayOptions : []
   readonly property string profileLabel: alfred ? String(alfred.profileLabel || "default") : "default"
   readonly property string profileName: alfred ? String(alfred.profileName || "default") : "default"
+  readonly property string profileKey: alfred ? String(alfred.profileKey || "local:default") : "local:default"
+  readonly property string profileShape: alfred ? String(alfred.profileShape || "cercle") : "cercle"
+  readonly property string profileFill: alfred ? String(alfred.profileFill || "#0a0a0c") : "#0a0a0c"
+  readonly property string profileExpression: alfred ? String(alfred.profileExpression || "neutre") : "neutre"
+  readonly property int profileIdle: alfred ? Number(alfred.profileIdle || 0) : 0
+  readonly property real profilePhase: alfred ? Number(alfred.profilePhase || 0) : 0
+  readonly property string profileEyes: alfred ? String(alfred.profileEyes || "soft") : "soft"
   readonly property var profileOptions: alfred && alfred.profileOptions ? alfred.profileOptions : []
+  readonly property var roster: alfred && alfred.roster ? alfred.roster : []
   readonly property string gatewayKind: alfred ? String(alfred.gatewayKind || "local") : "local"
   readonly property bool anyBusy: alfred ? alfred.anyBusy === true : false
   readonly property var chats: alfred && alfred.chats ? alfred.chats : []
@@ -128,13 +136,25 @@ Item {
     return root.moodColor
   }
   readonly property string fontFamily: Style.font.family
-  readonly property int ballSize: Math.max(Style.space(52), Style.font.title + Style.space(28))
-  readonly property int pillWidth: root.focused ? Style.space(720) : root.ballSize
+  // Logical pixels shrink on a scaled 4K panel; sizing the ball by the
+  // screen's short side (1080 = 1) keeps it the same on every monitor.
+  readonly property real screenFit: {
+    var s = root.activeScreen
+    var side = s ? Math.min(s.width, s.height) : 1080
+    return Math.max(0.75, Math.min(2, side / 1080))
+  }
+  readonly property int ballSize: Math.round(Math.max(Style.space(60), Style.font.title + Style.space(34)) * root.screenFit)
+  readonly property int agentSize: Style.space(Theme.primaryPx())
+  readonly property bool ballOrbits: root.compact && (root.mood === "busy" || root.mood === "listening")
+  readonly property int ballPad: root.ballOrbits ? Math.round(Style.space(18) * root.screenFit) : 0
+  // the compact ball swells a little while its agent works
+  readonly property int ballFace: root.compact && root.mood === "busy" ? Math.round(root.ballSize * 1.3) : root.ballSize
+  readonly property int pillWidth: root.focused ? Style.space(720) : root.ballFace + root.ballPad * 2
   readonly property int composerTextHeight: composerInput ? Math.min(Math.ceil(composerInput.implicitHeight), Style.space(Theme.composerMaxPx())) : Style.font.body
   readonly property bool composerMultiline: composerInput ? composerInput.lineCount > 1 : false
   readonly property int pillHeight: root.focused
-    ? Math.max(root.ballSize, root.composerTextHeight + root.surfacePadY * 2 + Style.space(16))
-    : root.ballSize
+    ? root.surfacePadY * 2 + root.controlGap + Math.max(root.composerTextHeight, root.agentSize) + root.agentSize
+    : root.ballFace + root.ballPad * 2
   readonly property int rowAlign: root.composerMultiline ? Qt.AlignBottom : Qt.AlignVCenter
   readonly property int controlGap: Style.space(Theme.gapPx())
   readonly property int surfacePadX: Style.space(Theme.padXPx())
@@ -384,6 +404,13 @@ Item {
     for (var id in actions) {
       if (root.localKeys(id) === text) {
         actions[id]()
+        return true
+      }
+    }
+    for (var j = 0; j < root.shortcutsLocal.length; j++) {
+      var sid = String(root.shortcutsLocal[j].id || "")
+      if (sid.indexOf("profile:") === 0 && root.localKeys(sid) === text) {
+        root.chooseProfile(sid.substring(8))
         return true
       }
     }
@@ -1044,12 +1071,12 @@ Item {
         Behavior on height {
           NumberAnimation { duration: 120; easing.type: Easing.OutCubic }
         }
-        readonly property bool ringRunning: root.listening || (root.mood === "busy" && !root.awaitingPermission)
+        readonly property bool ringRunning: !root.compact && (root.listening || (root.mood === "busy" && !root.awaitingPermission))
         radius: root.compact ? height / 2 : Style.space(Theme.arcRadiusPx())
-        color: root.surface
-        border.width: pill.ringRunning ? 0 : (root.mood === "idle" ? 1 : 2)
+        color: root.compact ? "transparent" : root.surface
+        border.width: root.compact || pill.ringRunning ? 0 : (root.mood === "idle" ? 1 : 2)
         border.color: root.rim
-        clip: true
+        clip: !root.compact
 
         GlowRing {
           anchors.fill: parent
@@ -1057,6 +1084,32 @@ Item {
           radius: pill.radius
           running: pill.ringRunning
           accent: root.listening ? Theme.moodRed() : root.foreground
+        }
+
+        ProfileBlob {
+          visible: root.compact
+          z: 3
+          anchors.centerIn: parent
+          width: root.ballFace
+          height: root.ballFace
+          agentId: root.profileKey
+          slot: "ball"
+          shape: root.profileShape
+          fill: root.profileFill
+          expression: root.profileExpression
+          idleVariant: root.profileIdle
+          phase: root.profilePhase
+          eyes: root.profileEyes
+          mood: root.mood
+          flow: "compact"
+          selected: false
+
+          Behavior on width {
+            NumberAnimation { duration: 260; easing.type: Easing.OutCubic }
+          }
+          Behavior on height {
+            NumberAnimation { duration: 260; easing.type: Easing.OutCubic }
+          }
         }
 
         MouseArea {
@@ -1074,165 +1127,205 @@ Item {
           }
         }
 
-        Item {
-          visible: root.compact
-          z: 3
-          anchors.centerIn: parent
-          width: Style.space(22)
-          height: Style.space(22)
-
-          Rectangle {
-            visible: root.mood === "listening"
-            anchors.centerIn: parent
-            width: Style.space(Theme.stopPx())
-            height: Style.space(Theme.stopPx())
-            radius: Style.space(3)
-            color: Theme.moodRed()
-          }
-
-          Text {
-            visible: root.mood !== "listening"
-            anchors.centerIn: parent
-            textFormat: Text.PlainText
-            text: root.mood === "permission"
-              ? Theme.glyph("lock")
-              : (root.mood === "error"
-                ? Theme.glyph("close")
-                : (root.mood === "success" ? Theme.glyph("check") : AlfredModel.butlerGlyph()))
-            color: root.mood === "idle" || root.mood === "busy" ? (root.busy ? Color.accent : root.foreground) : root.moodColor
-            font.family: root.mood === "idle" || root.mood === "busy" ? root.fontFamily : (menuCodicon.name !== "" ? menuCodicon.name : "codicon")
-            font.pixelSize: Style.font.title
-          }
-        }
-
-        RowLayout {
-          id: pillRow
-          z: 4
+        Column {
+          id: pillBody
           visible: root.focused
-          spacing: root.controlGap
+          z: 4
           anchors.fill: parent
           anchors.leftMargin: root.surfacePadX
           anchors.rightMargin: root.surfacePadX
           anchors.topMargin: root.surfacePadY
           anchors.bottomMargin: root.surfacePadY
+          spacing: root.controlGap
 
-          HudButton {
-            icon: "add"
-            Layout.alignment: root.rowAlign
-            opened: root.menuKind === "attach"
-            active: root.attachments.length > 0
-            badge: root.attachments.length
-            tooltipText: root.attachments.length > 0 ? root.attachments.length + " attached · click to add more" : "Attach"
-            onClicked: root.toggleMenu("attach")
-          }
+          RowLayout {
+            width: parent.width
+            spacing: root.controlGap
 
-          Flickable {
-            id: composerFlick
-            Layout.fillWidth: true
-            Layout.preferredWidth: 0
-            Layout.minimumWidth: Style.space(Theme.inputMinPx())
-            Layout.preferredHeight: root.composerTextHeight
-            Layout.alignment: Qt.AlignVCenter
-            clip: true
-            boundsBehavior: Flickable.StopAtBounds
-            flickableDirection: Flickable.VerticalFlick
-            interactive: contentHeight > height
+            HudButton {
+              icon: "add"
+              Layout.alignment: root.rowAlign
+              opened: root.menuKind === "attach"
+              active: root.attachments.length > 0
+              badge: root.attachments.length
+              tooltipText: root.attachments.length > 0 ? root.attachments.length + " attached · click to add more" : "Attach"
+              onClicked: root.toggleMenu("attach")
+            }
 
-            QQC.TextArea.flickable: QQC.TextArea {
-              id: composerInput
-              wrapMode: TextEdit.Wrap
-              color: root.foreground
-              selectionColor: Color.accent
-              selectedTextColor: Color.background
-              placeholderText: root.busy ? "Alfred is working…" : (root.transcribing ? "Transcribing…" : (root.listening ? "Listening…" : (root.gatewayActive ? "Ask Alfred" : "Gateway down")))
-              placeholderTextColor: root.dim
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.body
-              background: Item {}
-              leftPadding: Style.space(4)
-              rightPadding: Style.space(4)
-              topPadding: Style.space(2)
-              bottomPadding: Style.space(2)
-              readOnly: root.busy
-              enabled: root.focused && !root.busy
-              onTextChanged: root.syncSlash()
-              Keys.onPressed: function(event) {
-                if (root.handleCapture(event) || root.handleShortcut(event)) {
-                  event.accepted = true
-                  return
-                }
-                if (event.key === Qt.Key_Escape) {
-                  root.handleEscape()
-                  event.accepted = true
-                  return
-                }
-                if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
-                  if (event.modifiers & Qt.ShiftModifier) return
-                  if (!root.tryApplySlash()) root.submit()
-                  event.accepted = true
-                  return
-                }
-                if (!root.slashPanelOpen) return
-                if (event.key === Qt.Key_Down) {
-                  root.moveSlash(1)
-                  event.accepted = true
-                  return
-                }
-                if (event.key === Qt.Key_Up) {
-                  root.moveSlash(-1)
-                  event.accepted = true
-                  return
-                }
-                if (event.key === Qt.Key_Tab) {
-                  root.tryApplySlash()
-                  event.accepted = true
+            Flickable {
+              id: composerFlick
+              Layout.fillWidth: true
+              Layout.preferredWidth: 0
+              Layout.minimumWidth: Style.space(Theme.inputMinPx())
+              Layout.preferredHeight: root.composerTextHeight
+              Layout.alignment: Qt.AlignVCenter
+              clip: true
+              boundsBehavior: Flickable.StopAtBounds
+              flickableDirection: Flickable.VerticalFlick
+              interactive: contentHeight > height
+
+              QQC.TextArea.flickable: QQC.TextArea {
+                id: composerInput
+                wrapMode: TextEdit.Wrap
+                color: root.foreground
+                selectionColor: Color.accent
+                selectedTextColor: Color.background
+                placeholderText: root.busy ? (root.profileLabel + " is working…") : (root.transcribing ? "Transcribing…" : (root.listening ? "Listening…" : (root.gatewayActive ? ("Ask " + root.profileLabel) : "Gateway down")))
+                placeholderTextColor: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.body
+                background: Item {}
+                leftPadding: Style.space(4)
+                rightPadding: Style.space(4)
+                topPadding: Style.space(2)
+                bottomPadding: Style.space(2)
+                readOnly: root.busy
+                enabled: root.focused && !root.busy
+                onTextChanged: root.syncSlash()
+                Keys.onPressed: function(event) {
+                  if (root.handleCapture(event) || root.handleShortcut(event)) {
+                    event.accepted = true
+                    return
+                  }
+                  if (event.key === Qt.Key_Escape) {
+                    root.handleEscape()
+                    event.accepted = true
+                    return
+                  }
+                  if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+                    if (event.modifiers & Qt.ShiftModifier) return
+                    if (!root.tryApplySlash()) root.submit()
+                    event.accepted = true
+                    return
+                  }
+                  if (!root.slashPanelOpen) return
+                  if (event.key === Qt.Key_Down) {
+                    root.moveSlash(1)
+                    event.accepted = true
+                    return
+                  }
+                  if (event.key === Qt.Key_Up) {
+                    root.moveSlash(-1)
+                    event.accepted = true
+                    return
+                  }
+                  if (event.key === Qt.Key_Tab) {
+                    root.tryApplySlash()
+                    event.accepted = true
+                  }
                 }
               }
             }
           }
 
-          HudButton {
-            visible: root.busy
-            icon: root.previewOpen ? "eye-closed" : "eye"
-            Layout.alignment: root.rowAlign
-            active: root.previewOpen
-            tooltipText: root.previewOpen ? "Hide live preview (Ctrl+P)" : "Show what Alfred is doing (Ctrl+P)"
-            onClicked: root.togglePreview()
-          }
+          RowLayout {
+            width: parent.width
+            spacing: root.controlGap
 
-          HudButton {
-            wide: true
-            Layout.alignment: root.rowAlign
-            icon: "settings-gear"
-            trailingIcon: "chevron-down"
-            label: root.settingsSummary()
-            opened: root.menuKind === "settings" || root.menuParent === "settings"
-            tooltipText: "Model, reasoning, profile, gateway and sessions"
-            onClicked: root.toggleSettings()
-          }
+            Flickable {
+              id: agentFlick
+              Layout.fillWidth: true
+              Layout.preferredWidth: 0
+              Layout.preferredHeight: root.agentSize
+              Layout.maximumHeight: root.agentSize
+              Layout.alignment: Qt.AlignVCenter
+              clip: true
+              boundsBehavior: Flickable.StopAtBounds
+              flickableDirection: Flickable.HorizontalFlick
+              interactive: contentWidth > width
+              contentWidth: agentRow.implicitWidth
+              contentHeight: root.agentSize
 
-          HudButton {
-            icon: root.listening ? "stop" : "mic"
-            Layout.alignment: root.rowAlign
-            active: root.listening
-            tooltipText: root.listening ? "Stop dictation" : "Dictate"
-            onClicked: root.toggleVoice()
-          }
+              Row {
+                id: agentRow
+                height: root.agentSize
+                spacing: root.controlGap
 
-          HudButton {
-            primary: true
-            Layout.alignment: root.rowAlign
-            icon: root.showVoicePrimary ? "audio-lines" : (root.showStop ? "stop" : "arrow-up")
-            enabled: root.showVoicePrimary || root.showStop || root.hasPayload
-            tooltipText: root.showVoicePrimary ? "Start voice conversation" : (root.showStop ? "Stop" : "Send")
-            onClicked: root.handlePrimary()
-          }
+                Repeater {
+                  model: root.focused ? root.roster : 0
 
-          HudButton {
-            icon: "screen-normal"
-            Layout.alignment: root.rowAlign
-            tooltipText: "Exit HUD"
-            onClicked: root.openDesktop()
+                  Item {
+                    id: profileChip
+                    required property var modelData
+                    readonly property bool current: String(modelData.key || modelData.id || "") === root.profileKey
+                    width: root.agentSize
+                    height: root.agentSize
+
+                    ProfileBlob {
+                      anchors.fill: parent
+                      agentId: String(profileChip.modelData.key || profileChip.modelData.id || "")
+                      slot: "chip"
+                      shape: String(profileChip.modelData.shape || "cercle")
+                      fill: String(profileChip.modelData.fill || "#0a0a0c")
+                      expression: String(profileChip.modelData.expression || "")
+                      idleVariant: Number(profileChip.modelData.idle || 0)
+                      phase: Number(profileChip.modelData.phase || 0)
+                      eyes: String(profileChip.modelData.eyes || "soft")
+                      mood: profileChip.current ? root.mood : "idle"
+                      flow: profileChip.current ? "open" : ""
+                      selected: profileChip.current
+                    }
+
+                    MouseArea {
+                      id: profileChipHit
+                      anchors.fill: parent
+                      hoverEnabled: true
+                      cursorShape: Qt.PointingHandCursor
+                      preventStealing: true
+                      onPressed: function(mouse) { mouse.accepted = true }
+                      onClicked: {
+                        var key = String(profileChip.modelData.key || profileChip.modelData.id || "")
+                        Qt.callLater(function() { root.chooseProfile(key) })
+                      }
+                    }
+                  }
+                }
+              }
+            }
+
+            HudButton {
+              visible: root.busy
+              icon: root.previewOpen ? "eye-closed" : "eye"
+              Layout.alignment: root.rowAlign
+              active: root.previewOpen
+              tooltipText: root.previewOpen ? "Hide live preview (Ctrl+P)" : "Show what Alfred is doing (Ctrl+P)"
+              onClicked: root.togglePreview()
+            }
+
+            HudButton {
+              wide: true
+              Layout.alignment: root.rowAlign
+              icon: "settings-gear"
+              trailingIcon: "chevron-down"
+              label: root.settingsSummary()
+              opened: root.menuKind === "settings" || root.menuParent === "settings"
+              tooltipText: "Model, reasoning, profile, gateway and sessions"
+              onClicked: root.toggleSettings()
+            }
+
+            HudButton {
+              icon: root.listening ? "stop" : "mic"
+              Layout.alignment: root.rowAlign
+              active: root.listening
+              tooltipText: root.listening ? "Stop dictation" : "Dictate"
+              onClicked: root.toggleVoice()
+            }
+
+            HudButton {
+              primary: true
+              Layout.alignment: root.rowAlign
+              icon: root.showVoicePrimary ? "audio-lines" : (root.showStop ? "stop" : "arrow-up")
+              enabled: root.showVoicePrimary || root.showStop || root.hasPayload
+              tooltipText: root.showVoicePrimary ? "Start voice conversation" : (root.showStop ? "Stop" : "Send")
+              onClicked: root.handlePrimary()
+            }
+
+            HudButton {
+              icon: "screen-normal"
+              Layout.alignment: root.rowAlign
+              tooltipText: "Exit HUD"
+              onClicked: root.openDesktop()
+            }
           }
         }
       }
@@ -2098,14 +2191,16 @@ Item {
             }
 
             Repeater {
-              model: root.menuKind === "profile" ? root.profileOptions : 0
+              model: root.menuKind === "profile" ? root.roster : 0
 
               Rectangle {
+                id: profileRow
                 required property var modelData
+                readonly property bool current: String(modelData.key || modelData.id || "") === root.profileKey
                 width: menuCol.width
-                height: Style.space(34)
+                height: Style.space(40)
                 radius: Style.space(6)
-                color: String(modelData.id) === root.profileName
+                color: profileRow.current
                   ? Util.alpha(Color.accent, 0.18)
                   : (profileHit.containsMouse ? Util.alpha(Color.foreground, 0.08) : "transparent")
 
@@ -2115,35 +2210,46 @@ Item {
                   anchors.rightMargin: Style.space(8)
                   spacing: Style.space(8)
 
-                  Text {
-                    textFormat: Text.PlainText
-                    text: Theme.glyph("account")
-                    color: root.dim
-                    font.family: menuCodicon.name !== "" ? menuCodicon.name : "codicon"
-                    font.pixelSize: Style.space(Theme.iconPx())
+                  ProfileBlob {
+                    width: Style.space(22)
+                    height: Style.space(22)
                     anchors.verticalCenter: parent.verticalCenter
+                    agentId: String(profileRow.modelData.key || profileRow.modelData.id || "")
+                    slot: "menu"
+                    shape: String(profileRow.modelData.shape || "cercle")
+                    fill: String(profileRow.modelData.fill || "#0a0a0c")
+                    expression: String(profileRow.modelData.expression || "")
+                    idleVariant: Number(profileRow.modelData.idle || 0)
+                    phase: Number(profileRow.modelData.phase || 0)
+                    eyes: String(profileRow.modelData.eyes || "soft")
+                    mood: "idle"
                   }
 
                   Column {
                     anchors.verticalCenter: parent.verticalCenter
                     spacing: 0
-                    width: parent.width - Style.space(28)
+                    width: parent.width - Style.space(38)
 
                     Text {
                       width: parent.width
                       textFormat: Text.PlainText
-                      text: String(modelData.label || modelData.id || "")
+                      text: String(profileRow.modelData.label || profileRow.modelData.id || "")
                       elide: Text.ElideRight
-                      color: String(modelData.id) === root.profileName ? Color.accent : root.foreground
+                      color: profileRow.current ? Color.accent : root.foreground
                       font.family: root.fontFamily
                       font.pixelSize: Style.font.caption
                     }
 
                     Text {
                       width: parent.width
-                      visible: String(modelData.model || "") !== ""
+                      visible: text !== ""
                       textFormat: Text.PlainText
-                      text: String(modelData.model || "")
+                      text: {
+                        var bits = []
+                        if (String(profileRow.modelData.gatewayLabel || "") !== "") bits.push(String(profileRow.modelData.gatewayLabel))
+                        if (String(profileRow.modelData.shortcut || "") !== "") bits.push(String(profileRow.modelData.shortcut))
+                        return bits.join(" · ")
+                      }
                       elide: Text.ElideRight
                       color: root.dim
                       font.family: root.fontFamily
@@ -2160,7 +2266,7 @@ Item {
                   preventStealing: true
                   onPressed: function(mouse) {
                     mouse.accepted = true
-                    var id = String(modelData.id || "")
+                    var id = String(profileRow.modelData.key || profileRow.modelData.id || "")
                     Qt.callLater(function() { root.chooseProfile(id) })
                   }
                 }

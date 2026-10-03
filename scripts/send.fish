@@ -116,7 +116,7 @@ if test -z "$reasoning"
   set reasoning ($hermes config get agent.reasoning_effort 2>/dev/null | string trim -c '"' | string trim)
 end
 
-set -l script_dir (dirname (status filename))
+set -l script_dir (realpath (dirname (status filename)))
 set -l gw (python3 $script_dir/gateways.py get 2>/dev/null)
 set -l kind local
 set -l url ""
@@ -134,11 +134,7 @@ if test "$kind" != local; and test -n "$url"
   end
   cd $HOME
   set -l profile_name (python3 $script_dir/alfred-profile.py name 2>/dev/null)
-  set -l remote_title (string replace -r '^id:' '' -- $session)
-  if test -z "$remote_title"
-    set remote_title alfred
-  end
-  exec $py $script_dir/remote-send.py "$url" "$conn_id" "$remote_title" "$prompt" "$reasoning" "$profile_name"
+  exec $py -B $script_dir/remote-send.py "$url" "$conn_id" "$session" "$prompt" "$reasoning" "$profile_name"
 end
 
 set -l reasoning_args

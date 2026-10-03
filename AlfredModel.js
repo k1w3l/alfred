@@ -208,6 +208,100 @@ function parseGateways(raw) {
   }
 }
 
+function parseRoster(raw) {
+  var text = String(raw || "").trim()
+  var empty = {
+    ok: false, current: "", profileName: "default", label: "default",
+    gatewayId: "local", gatewayLabel: "This device", gatewayKind: "local",
+    shape: "cercle", fill: "#0a0a0c", expression: "neutre", idle: 0, phase: 0,
+    eyes: "soft", profiles: [], bindsChanged: false
+  }
+  if (text === "") return empty
+  try {
+    var parsed = JSON.parse(text)
+    if (!parsed || typeof parsed !== "object") return empty
+    var list = []
+    var rows = Array.isArray(parsed.profiles) ? parsed.profiles : []
+    var i
+    for (i = 0; i < rows.length; i++) {
+      var row = rows[i]
+      if (!row || typeof row !== "object") continue
+      var key = String(row.key || row.id || "").trim()
+      if (key === "") continue
+      list.push({
+        key: key,
+        id: key,
+        profileId: String(row.profileId || ""),
+        gatewayId: String(row.gatewayId || "local"),
+        gatewayLabel: String(row.gatewayLabel || ""),
+        gatewayKind: String(row.gatewayKind || "local"),
+        label: String(row.label || key),
+        model: String(row.model || ""),
+        shortcut: String(row.shortcut || ""),
+        globalShortcut: String(row.globalShortcut || ""),
+        shape: String(row.shape || "cercle"),
+        fill: String(row.fill || "#0a0a0c"),
+        expression: String(row.expression || "neutre"),
+        idle: Number(row.idle || 0),
+        phase: Number(row.phase || 0),
+        eyes: String(row.eyes || "soft"),
+        selected: row.selected === true || key === String(parsed.current || "")
+      })
+    }
+    var current = String(parsed.current || "")
+    var selected = null
+    for (i = 0; i < list.length; i++) {
+      if (list[i].key === current) selected = list[i]
+    }
+    if (!selected && list.length > 0) selected = list[0]
+    return {
+      ok: parsed.ok !== false && list.length > 0,
+      current: selected ? selected.key : current,
+      profileName: String(parsed.profileName || (selected ? selected.profileId : "default")),
+      label: String(parsed.label || (selected ? selected.label : "default")),
+      gatewayId: String(parsed.gatewayId || (selected ? selected.gatewayId : "local")),
+      gatewayLabel: String(parsed.gatewayLabel || (selected ? selected.gatewayLabel : "This device")),
+      gatewayKind: String(parsed.gatewayKind || (selected ? selected.gatewayKind : "local")),
+      model: String(parsed.model || ""),
+      shape: String(parsed.shape || (selected ? selected.shape : "cercle")),
+      fill: String(parsed.fill || (selected ? selected.fill : "#0a0a0c")),
+      expression: String(parsed.expression || (selected ? selected.expression : "neutre")),
+      idle: Number(parsed.idle !== undefined && parsed.idle !== "" ? parsed.idle : (selected ? selected.idle : 0)),
+      phase: Number(parsed.phase !== undefined && parsed.phase !== "" ? parsed.phase : (selected ? selected.phase : 0)),
+      eyes: String(parsed.eyes || (selected ? selected.eyes : "soft")),
+      profiles: list,
+      bindsChanged: parsed.bindsChanged === true
+    }
+  } catch (e) {
+    return empty
+  }
+}
+
+// "id:<session>" is only valid on the gateway+profile that issued it; elsewhere start a fresh session.
+function scopedSessionRef(sessionRef, sessionScope, profileKey) {
+  var ref = String(sessionRef || "")
+  var scope = String(sessionScope || "")
+  if (ref.indexOf("id:") !== 0) return ref
+  if (scope === "" || scope === String(profileKey || "")) return ref
+  return ""
+}
+
+function rosterKeyForGateway(roster, gatewayId, profileName) {
+  var rows = Array.isArray(roster) ? roster : []
+  var gid = String(gatewayId || "")
+  var want = String(profileName || "")
+  var fallback = ""
+  var first = ""
+  for (var i = 0; i < rows.length; i++) {
+    var row = rows[i]
+    if (!row || String(row.gatewayId) !== gid) continue
+    if (String(row.profileId) === want) return String(row.key)
+    if (String(row.profileId) === "default" && fallback === "") fallback = String(row.key)
+    if (first === "") first = String(row.key)
+  }
+  return fallback !== "" ? fallback : first
+}
+
 function parseProfiles(raw) {
   var text = String(raw || "").trim()
   var empty = { ok: false, current: "default", label: "default", profiles: [] }

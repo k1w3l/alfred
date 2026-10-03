@@ -157,6 +157,10 @@ def main() -> int:
             print(json.dumps({"ok": False, "error": f"unknown gateway: {want}", "current": current, "connections": rows}))
             return 2
         state["connectionId"] = want
+        # A profile name is only meaningful on its own gateway; never leave e.g. local + "tiberius".
+        if not str(state.get("profileKey") or "").startswith(want + ":"):
+            state["profileName"] = "default"
+            state["profileKey"] = f"{want}:default"
         save_state(state)
         current = want
         if registry_path and registry_path.is_file():

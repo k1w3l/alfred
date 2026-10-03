@@ -39,13 +39,14 @@ omarchy bar move kiwel.alfred --section right
 - Type `/` in the composer to list Hermes commands and skills (same catalog as Hermes Desktop). Arrow keys move, Tab or Enter inserts, Escape closes the list.
 - Right-click the bar icon opens Hermes Desktop (when installed).
 - Middle-click hides the overlay.
-- While the pill has focus, click outside to shrink it to a ball; hover or click the ball to open it again.
+- While the pill has focus, the Hermes profiles sit on the lower row, at the size of the send button (local gateway and every remote Desktop gateway). The prompt and the attach button fill the row above. Click a face to select it. The face is the ball when the pill shrinks, and it replaces the bar icon. Each agent has its own shape, colour, expression and idle film, offset so the row does not move in lockstep. A hairline cream rim keeps a dark body visible, and the face is drawn at 4x and mipmapped down so its edge stays smooth. Voice uses an attentive face and a slightly thicker red rim. The ball and the current face follow a flow instead of a loop: shrinking the pill plays `start` once, a new task plays `start-work` once, then `working` loops (the ball grows a little while it works). The result plays `success`, `error` or `attention` three times, then `notification` loops until you open the pill, which plays `end` once and returns to idle.
+- Click outside to shrink the pill to that face; hover or click it to open the pill again.
 - `+` attaches files, folders, or images through an in-overlay browser (Wayland layer-shell cannot host the native Desktop dialog above the HUD). The `+` button shows a badge with the attachment count, and each attachment appears as a chip under the pill with its type icon and an X to remove it; **Clear all** drops every one.
 - The composer grows as you type (up to about eight lines, then scrolls). Enter sends, Shift+Enter adds a line.
 - The gear dropdown (labelled with the current model and effort) groups every setting:
   - **Model** switches `model.default` for the current Hermes provider.
   - **Reasoning** sets `agent.reasoning_effort` (`none` … `ultra`).
-  - **Profile** lists Hermes profiles (`hermes profile list`) and runs `hermes profile use` sticky; local sends use `hermes -p <name>`.
+  - **Profile** lists the same faces as the pill: local profiles and the profiles of each remote gateway. Choosing one selects that gateway and that profile. A local choice also runs `hermes profile use`; a remote choice does not change the local sticky profile.
   - **Keyboard shortcuts** rebinds the global Hyprland keys and the keys inside the pill. Click a shortcut, press the new combination (Escape cancels, Backspace turns it off); the reset icon restores the default.
   - **Gateway** lists connections from Hermes Desktop (`~/.config/Hermes/connections.json`). Choose **This device** for the local CLI, or a remote entry to send through that dashboard.
 - Under the pill, **New chat** and **Previous sessions** sit side by side. Previous sessions lists recent sessions from the active profile's `state.db` (cron runs hidden); picking one opens it as a chat and resumes it with `hermes chat --resume`.
@@ -67,6 +68,8 @@ Default shortcuts (change them in the gear dropdown under **Keyboard shortcuts**
 | Ctrl+Tab / Ctrl+Shift+Tab | Pill | Next / previous chat |
 | Ctrl+H | Pill | Previous sessions |
 | Ctrl+P | Pill | Toggle the live preview (while working) |
+| Ctrl+1 … Ctrl+9 | Pill | Switch to a profile (order shown in the pill) |
+| Super+Alt+1 … Super+Alt+9 | Global | Switch to the same profile from anywhere |
 
 Global keys are written to `~/.config/hypr/alfred.lua` and applied with `hyprctl reload`. Load that file once from your Hyprland bindings:
 

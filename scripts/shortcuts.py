@@ -62,6 +62,11 @@ def configured(state: dict, scope: str) -> dict:
     return values if isinstance(values, dict) else {}
 
 
+def profile_bind_rows(state: dict) -> list[dict]:
+    rows = state.get("profileBinds") or []
+    return [row for row in rows if isinstance(row, dict) and str(row.get("key") or "").strip()]
+
+
 def resolved(state: dict) -> dict:
     out = {"global": [], "local": []}
     user = configured(state, "global")
@@ -70,6 +75,17 @@ def resolved(state: dict) -> dict:
     user = configured(state, "local")
     for key, label, default in LOCAL_ACTIONS:
         out["local"].append({"id": key, "label": label, "keys": str(user.get(key, default)), "default": default})
+    user_global = configured(state, "global")
+    user_local = configured(state, "local")
+    for row in profile_bind_rows(state):
+        key = str(row.get("key") or "").strip()
+        ident = "profile:" + key
+        label = "Switch to " + str(row.get("label") or key)
+        global_default = str(row.get("global") or "")
+        local_default = str(row.get("local") or "")
+        command = "omarchy-shell kiwel.alfred profile " + key
+        out["global"].append({"id": ident, "label": label, "keys": str(user_global.get(ident, global_default)), "default": global_default, "command": command})
+        out["local"].append({"id": ident, "label": label, "keys": str(user_local.get(ident, local_default)), "default": local_default})
     return out
 
 
@@ -128,7 +144,8 @@ def main() -> int:
         scope, action = sys.argv[2], sys.argv[3]
         keys = sys.argv[4].strip() if len(sys.argv) > 4 else ""
         actions = {a[0]: a for a in (GLOBAL_ACTIONS if scope == "global" else LOCAL_ACTIONS)}
-        if scope not in ("global", "local") or action not in actions:
+        profile_ids = {"profile:" + str(row.get("key")) for row in profile_bind_rows(state)}
+        if scope not in ("global", "local") or (action not in actions and action not in profile_ids):
             print(json.dumps(report(state, f"unknown shortcut {scope}/{action}"), ensure_ascii=False))
             return 1
         block = state.setdefault("shortcuts", {})

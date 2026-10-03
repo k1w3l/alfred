@@ -88,7 +88,24 @@ async def rpc(ws, method: str, params: dict | None = None, timeout: float = 30.0
             )
 
 
-async def collect_reply(ws, session_id: str, timeout: float = 600.0) -> str:
+def emit(event: dict) -> None:
+    sys.stdout.write(json.dumps(event, ensure_ascii=False) + "\n")
+    sys.stdout.flush()
+
+
+def unwrap_event(msg: dict) -> tuple[str, str, dict]:
+    """(type, session_id, payload) for both `{"method":"event","params":{type,payload}}` and bare methods."""
+    method = str(msg.get("method") or "")
+    params = msg.get("params") or {}
+    if not isinstance(params, dict):
+        params = {}
+    if method == "event":
+        payload = params.get("payload")
+        return str(params.get("type") or ""), str(params.get("session_id") or ""), payload if isinstance(payload, dict) else {}
+    return method, str(params.get("session_id") or ""), params
+
+
+async def collect_reply(ws, session_id: str, stored_id: str, timeout: float = 600.0) -> str:
     chunks: list[str] = []
     deadline = asyncio.get_event_loop().time() + timeout
     while True:
@@ -100,7 +117,7 @@ async def collect_reply(ws, session_id: str, timeout: float = 600.0) -> str:
         method = str(msg.get("method") or "")
         params = msg.get("params") or {}
         # Answer server requests so the turn does not stall forever.
-        if method and msg.get("id") and "result" not in msg:
+        if method and method != "event" and msg.get("id") and "result" not in msg:
             if method == "approval":
                 await ws.send(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": {"choice": "once"}}))
             else:
@@ -114,22 +131,25 @@ async def collect_reply(ws, session_id: str, timeout: float = 600.0) -> str:
                     )
                 )
             continue
-        if method == "message.delta":
-            if str(params.get("session_id") or "") in ("", session_id):
-                text = params.get("text") or params.get("delta") or ""
-                if text:
-                    chunks.append(str(text))
-                    sys.stdout.write(str(text))
-                    sys.stdout.flush()
-        elif method in ("message.complete", "message.done"):
-            if str(params.get("session_id") or "") in ("", session_id):
-                final = params.get("text") or params.get("content") or "".join(chunks)
-                if final and not chunks:
-                    sys.stdout.write(str(final))
-                    sys.stdout.flush()
-                return str(final or "".join(chunks))
-        elif method in ("error", "session.error"):
-            raise RuntimeError(str(params.get("message") or params or "remote error"))
+        kind, sid, payload = unwrap_event(msg)
+        if sid not in ("", session_id):
+            continue
+        if kind == "message.delta":
+            text = payload.get("text") or payload.get("delta") or ""
+            if text:
+                chunks.append(str(text))
+                emit({"type": "text", "text": str(text)})
+        elif kind in ("message.complete", "message.done"):
+            final = payload.get("text") or payload.get("content") or "".join(chunks)
+            if not isinstance(final, str):
+                final = json.dumps(final, ensure_ascii=False)
+            result = {"type": "result", "text": final, "session_id": stored_id}
+            if str(payload.get("status") or "") == "error":
+                result["error"] = final or "remote turn failed"
+            emit(result)
+            return final
+        elif kind in ("error", "session.error") and sid:
+            raise RuntimeError(str(payload.get("message") or payload or "remote error"))
 
 
 async def run(url: str, connection_id: str, session_name: str, prompt: str, reasoning: str, profile: str = "") -> int:
@@ -159,26 +179,40 @@ async def run(url: str, connection_id: str, session_name: str, prompt: str, reas
             try:
                 raw = await asyncio.wait_for(ws.recv(), timeout=5)
                 msg = json.loads(raw)
-                if msg.get("method") == "gateway.ready":
+                if unwrap_event(msg)[0] == "gateway.ready":
                     await rpc(ws, "client.capabilities", {"server_requests": True}, timeout=10)
             except Exception:
                 pass
 
-            created = await rpc(
-                ws,
-                "session.create",
-                {
-                    "title": session_name or "alfred",
-                    "source": "alfred",
-                    **({"profile": profile} if profile and profile != "default" else {}),
-                },
-                timeout=30,
-            )
+            scope = {"profile": profile} if profile and profile != "default" else {}
+            created = None
+            # "id:<stored>" continues a session this gateway+profile issued; anything else is a fresh turn.
+            if session_name.startswith("id:"):
+                try:
+                    created = await rpc(
+                        ws,
+                        "session.resume",
+                        {"session_id": session_name[3:], "omit_messages": True, **scope},
+                        timeout=30,
+                    )
+                except Exception:
+                    created = None
+            if not isinstance(created, dict) or not (created.get("session_id") or created.get("id")):
+                title = "" if session_name.startswith("id:") else session_name
+                created = await rpc(
+                    ws,
+                    "session.create",
+                    {"source": "alfred", **({"title": title} if title else {}), **scope},
+                    timeout=30,
+                )
             session_id = ""
+            stored_id = ""
             if isinstance(created, dict):
                 session_id = str(created.get("session_id") or created.get("id") or "")
+                stored_id = str(created.get("stored_session_id") or created.get("resumed") or session_id)
             if not session_id:
                 raise RuntimeError(f"session.create returned no id: {created}")
+            emit({"type": "system", "session_id": stored_id})
 
             if reasoning:
                 try:
@@ -187,7 +221,7 @@ async def run(url: str, connection_id: str, session_name: str, prompt: str, reas
                     pass
 
             await rpc(ws, "prompt.submit", {"session_id": session_id, "text": prompt}, timeout=30)
-            await collect_reply(ws, session_id)
+            await collect_reply(ws, session_id, stored_id)
     return 0
 
 
