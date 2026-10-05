@@ -1717,6 +1717,7 @@ var Bloub = (() => {
       { state: "sleep", duration: 2.5 },
       { state: "wide", duration: 2.5 }
     ],
+    // Kept so a hand-built play() can still ask. The director does not schedule them.
     start: [{ state: "comet", duration: 2.5 }],
     startWork: [
       { state: "idle", duration: 2.5 },
@@ -1872,7 +1873,7 @@ var Bloub = (() => {
     const d = directors.get(key);
     const tl = compile(sequence && sequence.length ? sequence : [{ cycle: "idle0" }], clock);
     if (d) d.timeline = tl;
-    else directors.set(key, { timeline: tl, compact: false, mood: "idle", latched: "", workAt: -1, startedAt: -1, seen: clock });
+    else directors.set(key, { timeline: tl, compact: false, mood: "idle", latched: "", seen: clock });
     return tl.once.map((b) => b.clip + ":" + b.state + "@" + (b.at - clock).toFixed(2)).concat(["loop " + tl.loopClip]);
   }
   function direct(agentKey, clock, mood, compact, idleVariant) {
@@ -1884,8 +1885,6 @@ var Bloub = (() => {
         compact,
         mood,
         latched: mood === "permission" ? "attention" : "",
-        workAt: -1,
-        startedAt: -1,
         seen: clock
       };
       directors.set(agentKey, d);
@@ -1898,15 +1897,8 @@ var Bloub = (() => {
     d.compact = compact;
     d.mood = mood;
     const busy = mood === "busy" || mood === "working";
-    const wasBusy = wasMood === "busy" || wasMood === "working";
-    if (busy && !wasBusy && wasMood !== "permission") d.workAt = clock;
     if (compact !== wasCompact) {
       if (compact) {
-        if (busy && d.workAt >= 0 && d.startedAt !== d.workAt && clock - d.workAt < 5) {
-          d.startedAt = d.workAt;
-          d.timeline = compile([{ cycle: "start" }, { cycle: "startWork" }, { cycle: "working" }], clock);
-          return d;
-        }
         if (mood !== wasMood && OUTCOME_CLIP[mood] && !busy) {
           d.latched = OUTCOME_CLIP[mood];
           d.timeline = compile([{ cycle: d.latched, repeat: 3 }, { cycle: tailOf(d, idleVariant) }], clock);
@@ -1929,17 +1921,10 @@ var Bloub = (() => {
       return d;
     }
     if (mood === wasMood) return d;
-    const prefix = runningPrefix(d.timeline, clock, ["start", "end"]);
+    const prefix = runningPrefix(d.timeline, clock, ["end"]);
     if (busy) {
       d.latched = "";
-      if (wasMood === "permission") {
-        d.timeline = compile([{ cycle: "working" }], clock, prefix);
-      } else if (compact && d.startedAt !== d.workAt) {
-        d.startedAt = d.workAt;
-        d.timeline = compile([{ cycle: "start" }, { cycle: "startWork" }, { cycle: "working" }], clock, prefix);
-      } else {
-        d.timeline = compile([{ cycle: "startWork" }, { cycle: "working" }], clock, prefix);
-      }
+      d.timeline = compile([{ cycle: "working" }], clock, prefix);
       return d;
     }
     if (mood === "listening" || wasMood === "listening") {
@@ -1953,7 +1938,7 @@ var Bloub = (() => {
       return d;
     }
     if (d.latched) return d;
-    const keep = runningPrefix(d.timeline, clock, ["start", "end", "success", "error", "attention"]);
+    const keep = runningPrefix(d.timeline, clock, ["end", "success", "error", "attention"]);
     d.timeline = compile([{ cycle: tailOf(d, idleVariant) }], clock, keep);
     return d;
   }
@@ -2001,7 +1986,8 @@ var Bloub = (() => {
         me: dot.x,
         mf: dot.y,
         color,
-        opacity
+        opacity,
+        span: 1.6
       };
     }
     return {
@@ -2013,8 +1999,20 @@ var Bloub = (() => {
       me: 0,
       mf: 0,
       color,
-      opacity
+      opacity,
+      // Circumference in the same space as `path`, so the rim dash fits the dot.
+      span: Math.PI * 2 * Math.max(dot.r, 0.01)
     };
+  }
+  function pathSpan(path) {
+    const nums = path.match(/-?\d*\.?\d+/g);
+    if (!nums || nums.length < 4) return 620;
+    const pts = [{ x: Number(nums[0]), y: Number(nums[1]) }];
+    for (let i = 2; i + 5 < nums.length; i += 6) pts.push({ x: Number(nums[i + 4]), y: Number(nums[i + 5]) });
+    let span = 0;
+    for (let i = 1; i < pts.length; i++) span += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+    if (pts.length > 2) span += Math.hypot(pts[0].x - pts[pts.length - 1].x, pts[0].y - pts[pts.length - 1].y);
+    return span > 8 ? span : 620;
   }
   function arcRecord(arc, which) {
     const path = which === "front" ? arc.front || "" : arc.back || "";
@@ -2110,6 +2108,7 @@ var Bloub = (() => {
       arcsFront,
       dots,
       dotsBehind: frame.dotsBehind,
+      span: pathSpan(frame.bodyPath),
       notif: frame.notif ? circlePath(frame.notif.x, frame.notif.y, frame.notif.r) : "",
       clip: placed.clip,
       state: placed.state

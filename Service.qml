@@ -57,6 +57,8 @@ Item {
   property int profileIdle: 0
   property real profilePhase: 0
   property string profileEyes: "soft"
+  property bool statusKnown: false
+  property string faceSig: ""
   property var profileOptions: []
   property var roster: []
   property bool pickingFiles: false
@@ -632,6 +634,33 @@ Item {
     if (parsed.eyes !== "") profileEyes = parsed.eyes
     if (parsed.model !== "") modelName = parsed.model
     if (parsed.bindsChanged) root.refreshShortcuts()
+    root.publishFace()
+  }
+
+  // The replacement bar cannot see this service (its shell facade has no
+  // service lookup). The tray reads this snapshot instead.
+  function publishFace() {
+    var mood = "idle"
+    if (root.listening) mood = "listening"
+    else if (root.awaitingPermission) mood = "attention"
+    else if (root.busy) mood = "busy"
+    else if (root.lastOutcome === "error") mood = "error"
+    else if (root.lastOutcome === "success") mood = "success"
+    else if (root.statusKnown && !root.gatewayActive) mood = "error"
+    var payload = JSON.stringify({
+      key: root.profileKey,
+      label: root.profileLabel,
+      shape: root.profileShape,
+      fill: root.profileFill,
+      expression: root.profileExpression,
+      idle: root.profileIdle,
+      phase: root.profilePhase,
+      eyes: root.profileEyes,
+      mood: mood
+    })
+    if (payload === root.faceSig) return
+    root.faceSig = payload
+    faceFile.setText(payload + "\n")
   }
 
   function applyProfiles(raw) {
@@ -772,13 +801,17 @@ Item {
       gatewayActive = false
       gatewayState = "unknown"
       statusText = parsed.lastError || "Status failed"
+      root.statusKnown = true
       if (parsed.lastError) root.setActiveError(parsed.lastError)
+      root.publishFace()
       return
     }
     gatewayActive = parsed.active === true
     gatewayState = parsed.state
     statusText = gatewayActive ? "Ready" : ("Gateway " + parsed.state)
+    root.statusKnown = true
     if (gatewayActive && lastError.indexOf("Gateway") === 0) root.setActiveError("")
+    root.publishFace()
   }
 
   function finishSend(id, exitCode) {
@@ -1262,7 +1295,22 @@ Item {
     }
   }
 
+  FileView {
+    id: faceFile
+    path: root.home + "/.config/Hermes/alfred-face.json"
+    watchChanges: false
+    atomicWrites: true
+    printErrors: false
+  }
+
+  onBusyChanged: root.publishFace()
+  onListeningChanged: root.publishFace()
+  onAwaitingPermissionChanged: root.publishFace()
+  onLastOutcomeChanged: root.publishFace()
+  onGatewayActiveChanged: root.publishFace()
+
   Component.onCompleted: {
+    root.publishFace()
     root.ensureChat()
     root.refreshShortcuts()
     root.refreshStatus()
