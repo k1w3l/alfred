@@ -1,26 +1,20 @@
 #!/usr/bin/env fish
 
 # Alfred voice capture. start <wav> | stop <pid>
-# Uses pw-record when PipeWire is available.
+# start records with pw-record and prints LEVEL lines while samples arrive.
 
 set -gx PATH /usr/bin /usr/local/bin $HOME/.local/bin $PATH
 
 set -l mode $argv[1]
 set -l target $argv[2]
+set -l here (status dirname)
 
 if test "$mode" = start
   if test -z "$target"
     echo "missing wav path" >&2
     exit 2
   end
-  if command -q pw-record
-    exec pw-record --rate 16000 --channels 1 "$target"
-  end
-  if command -q parecord
-    exec parecord --rate=16000 --channels=1 "$target"
-  end
-  echo "pw-record not found" >&2
-  exit 127
+  exec python3 -B "$here/voice_capture.py" "$target"
 end
 
 if test "$mode" = stop

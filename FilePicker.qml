@@ -7,6 +7,22 @@ import "ComposerTheme.js" as Theme
 Rectangle {
   id: root
 
+  property real uiScale: 1
+
+  function px(n) {
+    var g = Number(Style.spacing.scale)
+    if (!(g > 0)) g = 1
+    var v = Style.space(n) * root.uiScale / g
+    if (!isFinite(v) || v <= 0) return 0
+    return Math.round(v)
+  }
+
+  function fontPx(size) {
+    var n = Number(size)
+    if (!isFinite(n) || n <= 0) return 0
+    return Math.max(1, Math.round(n * root.uiScale))
+  }
+
   property string mode: "files"
   property string homePath: {
     var home = Quickshell.env("HOME") || ""
@@ -81,7 +97,7 @@ Rectangle {
     if (root.selected.length > 0) root.accepted(root.selected.slice())
   }
 
-  radius: Style.space(Theme.arcRadiusPx())
+  radius: root.px(Theme.arcRadiusPx())
   color: Util.alpha(Qt.darker(Color.background, 1.25), 0.92)
   border.width: 1
   border.color: Util.alpha(Color.accent, 0.18)
@@ -99,18 +115,18 @@ Rectangle {
 
   Column {
     anchors.fill: parent
-    anchors.margins: Style.space(8)
-    spacing: Style.space(6)
+    anchors.margins: root.px(8)
+    spacing: root.px(6)
 
     Row {
       width: parent.width
-      spacing: Style.space(6)
-      height: Style.space(26)
+      spacing: root.px(6)
+      height: root.px(26)
 
       Rectangle {
-        width: Style.space(26)
-        height: Style.space(26)
-        radius: Style.space(6)
+        width: root.px(26)
+        height: root.px(26)
+        radius: root.px(6)
         color: upHit.containsMouse ? Util.alpha(Color.foreground, 0.10) : "transparent"
         Text {
           anchors.centerIn: parent
@@ -118,7 +134,7 @@ Rectangle {
           text: ".."
           color: root.dim
           font.family: Style.font.family
-          font.pixelSize: Style.font.caption
+          font.pixelSize: root.fontPx(Style.font.caption)
         }
         MouseArea {
           id: upHit
@@ -130,7 +146,7 @@ Rectangle {
       }
 
       Text {
-        width: parent.width - Style.space(32)
+        width: parent.width - root.px(32)
         height: parent.height
         verticalAlignment: Text.AlignVCenter
         textFormat: Text.PlainText
@@ -138,14 +154,14 @@ Rectangle {
         elide: Text.ElideMiddle
         color: root.dim
         font.family: Style.font.family
-        font.pixelSize: Style.font.caption
+        font.pixelSize: root.fontPx(Style.font.caption)
       }
     }
 
     ListView {
       id: list
       width: parent.width
-      height: parent.height - Style.space(70)
+      height: parent.height - root.px(70)
       clip: true
       boundsBehavior: Flickable.StopAtBounds
       model: listing
@@ -156,8 +172,8 @@ Rectangle {
         required property string filePath
         required property bool fileIsDir
         width: list.width
-        height: Style.space(28)
-        radius: Style.space(6)
+        height: root.px(28)
+        radius: root.px(6)
         color: {
           if (!fileIsDir && root.isSelected(filePath)) return Util.alpha(Color.accent, 0.18)
           if (rowHit.containsMouse) return Util.alpha(Color.foreground, 0.08)
@@ -168,14 +184,14 @@ Rectangle {
           anchors.verticalCenter: parent.verticalCenter
           anchors.left: parent.left
           anchors.right: parent.right
-          anchors.leftMargin: Style.space(8)
-          anchors.rightMargin: Style.space(8)
+          anchors.leftMargin: root.px(8)
+          anchors.rightMargin: root.px(8)
           textFormat: Text.PlainText
           text: fileIsDir ? (fileName + "/") : fileName
           elide: Text.ElideRight
           color: fileIsDir ? Color.accent : root.ink
           font.family: Style.font.family
-          font.pixelSize: Style.font.caption
+          font.pixelSize: root.fontPx(Style.font.caption)
         }
 
         MouseArea {
@@ -202,14 +218,14 @@ Rectangle {
 
     Row {
       width: parent.width
-      spacing: Style.space(8)
+      spacing: root.px(8)
       layoutDirection: Qt.RightToLeft
-      height: Style.space(28)
+      height: root.px(28)
 
       Rectangle {
-        width: Style.space(64)
-        height: Style.space(26)
-        radius: Style.space(6)
+        width: root.px(64)
+        height: root.px(26)
+        radius: root.px(6)
         color: root.canOpen ? Util.alpha(Color.accent, openHit.containsMouse ? 0.28 : 0.18) : Util.alpha(Color.foreground, 0.06)
         Text {
           anchors.centerIn: parent
@@ -217,7 +233,7 @@ Rectangle {
           text: "Open"
           color: root.canOpen ? Color.accent : root.dim
           font.family: Style.font.family
-          font.pixelSize: Style.font.caption
+          font.pixelSize: root.fontPx(Style.font.caption)
         }
         MouseArea {
           id: openHit
@@ -230,9 +246,9 @@ Rectangle {
       }
 
       Rectangle {
-        width: Style.space(72)
-        height: Style.space(26)
-        radius: Style.space(6)
+        width: root.px(72)
+        height: root.px(26)
+        radius: root.px(6)
         color: cancelHit.containsMouse ? Util.alpha(Color.foreground, 0.10) : "transparent"
         Text {
           anchors.centerIn: parent
@@ -240,7 +256,7 @@ Rectangle {
           text: "Cancel"
           color: root.dim
           font.family: Style.font.family
-          font.pixelSize: Style.font.caption
+          font.pixelSize: root.fontPx(Style.font.caption)
         }
         MouseArea {
           id: cancelHit

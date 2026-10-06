@@ -30,6 +30,15 @@ Item {
   property string gatewayState: "unknown"
   property bool busy: false
   property bool listening: false
+  property real audioLevel: 0
+  property bool voiceCapturing: false
+  property bool voiceHearing: false
+  property int voiceElapsedMs: 0
+  property real voiceStartedAt: 0
+  property real voiceHeardUntil: 0
+  property real voiceCaptureUntil: 0
+  property bool voiceStopRequested: false
+  property string voiceError: ""
   property string lastError: ""
   property string statusText: "Checking…"
   property var messages: []
@@ -84,6 +93,8 @@ Item {
   // Prompt typed while an agent switch is still running; sent once the new gateway+profile is active.
   property var pendingSend: null
   property string pendingProfileKey: ""
+  property var pendingFace: null
+  property string rosterWriteKind: ""
   property int rosterSeq: 0
   property var sessionOptions: []
   property bool sessionsLoading: false
@@ -607,10 +618,61 @@ Item {
       root.pendingProfileKey = value
       return true
     }
+    root.rosterWriteKind = "set"
     root.rosterSeq += 1
     setRosterProcess.command = ["fish", "--no-config", root.pluginDir + "/scripts/roster.fish", "set", value]
     setRosterProcess.running = true
     return true
+  }
+
+  // One writer. A list or a selection already in flight keeps the face edit queued.
+  function setFace(key, shape, fill, expression, idle) {
+    var value = String(key || "").trim()
+    if (value === "") return false
+    var job = {
+      op: "face",
+      key: value,
+      shape: String(shape || "").trim(),
+      fill: String(fill || "").trim(),
+      expression: String(expression || "").trim(),
+      idle: idle === undefined || idle === null ? "" : String(idle)
+    }
+    if (setRosterProcess.running || rosterProcess.running) {
+      root.pendingFace = job
+      return true
+    }
+    root.startFaceJob(job)
+    return true
+  }
+
+  function resetFace(key) {
+    var value = String(key || "").trim()
+    if (value === "") return false
+    var job = { op: "face-reset", key: value, shape: "", fill: "", expression: "" }
+    if (setRosterProcess.running || rosterProcess.running) {
+      root.pendingFace = job
+      return true
+    }
+    root.startFaceJob(job)
+    return true
+  }
+
+  function startFaceJob(job) {
+    if (!job) return
+    if (setRosterProcess.running || rosterProcess.running) {
+      root.pendingFace = job
+      return
+    }
+    var op = String(job.op || "face")
+    var key = String(job.key || "").trim()
+    if (key === "") return
+    root.rosterWriteKind = op
+    root.rosterSeq += 1
+    if (op === "face-reset")
+      setRosterProcess.command = ["fish", "--no-config", root.pluginDir + "/scripts/roster.fish", "face-reset", key]
+    else
+      setRosterProcess.command = ["fish", "--no-config", root.pluginDir + "/scripts/roster.fish", "face", key, String(job.shape || ""), String(job.fill || ""), String(job.expression || ""), String(job.idle === undefined || job.idle === null ? "" : job.idle)]
+    setRosterProcess.running = true
   }
 
   function applyRoster(raw) {
@@ -682,10 +744,44 @@ Item {
     else root.startVoice()
   }
 
+  function ingestVoiceLevel(line) {
+    var text = String(line || "").trim()
+    if (text.indexOf("LEVEL ") !== 0) return
+    var parts = text.split(" ")
+    var level = Number(parts[1])
+    if (!isFinite(level)) level = 0
+    level = Math.max(0, Math.min(1, level))
+    root.audioLevel = root.audioLevel * 0.35 + level * 0.65
+    if (parts[2] === "1") {
+      root.voiceCapturing = true
+      root.voiceCaptureUntil = Date.now() + 450
+    } else if (Date.now() > root.voiceCaptureUntil) {
+      root.voiceCapturing = false
+    }
+    if (parts[3] === "1") {
+      root.voiceHearing = true
+      root.voiceHeardUntil = Date.now() + 700
+    }
+  }
+
+  function noteVoiceError(line) {
+    var text = String(line || "").trim()
+    if (text !== "") root.voiceError = text
+  }
+
   function startVoice() {
     if (voiceProcess.running || root.transcribing) return
     voicePath = root.runtimeDir + "/alfred-voice.wav"
     root.setActiveError("")
+    audioLevel = 0
+    voiceCapturing = false
+    voiceHearing = false
+    voiceElapsedMs = 0
+    voiceHeardUntil = 0
+    voiceCaptureUntil = 0
+    voiceError = ""
+    voiceStopRequested = false
+    voiceStartedAt = Date.now()
     listening = true
     voiceProcess.command = ["fish", "--no-config", root.pluginDir + "/scripts/voice.fish", "start", voicePath]
     voiceProcess.running = true
@@ -693,13 +789,18 @@ Item {
 
   function stopVoice() {
     listening = false
-    if (voiceProcess.running) voiceProcess.running = false
+    if (voiceProcess.running) {
+      voiceStopRequested = true
+      voiceProcess.running = false
+      return
+    }
     if (voicePath === "") return
     transcribeDelay.restart()
   }
 
   function cancelVoice() {
     listening = false
+    voiceStopRequested = false
     transcribeDelay.stop()
     transcribing = false
     if (voiceProcess.running) voiceProcess.running = false
@@ -1252,8 +1353,12 @@ Item {
     }
     stderr: StdioCollector { waitForEnd: true }
     onExited: function() {
-      if (rosterProcess.startedSeq !== root.rosterSeq) return
-      root.applyRoster(rosterOut.text)
+      if (rosterProcess.startedSeq === root.rosterSeq)
+        root.applyRoster(rosterOut.text)
+      if (!root.pendingFace || setRosterProcess.running) return
+      var face = root.pendingFace
+      root.pendingFace = null
+      Qt.callLater(function() { root.startFaceJob(face) })
     }
   }
 
@@ -1267,12 +1372,27 @@ Item {
     stderr: StdioCollector { waitForEnd: true }
     onExited: function() {
       root.applyRoster(setRosterOut.text)
+      var kind = root.rosterWriteKind
+      root.rosterWriteKind = ""
+      if (root.pendingFace && !rosterProcess.running) {
+        var face = root.pendingFace
+        root.pendingFace = null
+        Qt.callLater(function() { root.startFaceJob(face) })
+        if (kind === "set") {
+          root.refreshStatus()
+          root.refreshGateways()
+          root.afterProfileChange()
+          root.flushPendingSend()
+        }
+        return
+      }
       var next = root.pendingProfileKey
       root.pendingProfileKey = ""
       if (next !== "" && next !== root.profileKey) {
         Qt.callLater(function() { root.selectProfile(next) })
         return
       }
+      if (kind === "face" || kind === "face-reset") return
       root.refreshStatus()
       root.refreshGateways()
       root.afterProfileChange()
@@ -1287,11 +1407,41 @@ Item {
     onTriggered: root.refreshRoster()
   }
 
+  Timer {
+    id: voiceClock
+    interval: 100
+    repeat: true
+    running: root.listening
+    onTriggered: {
+      if (root.voiceStartedAt > 0)
+        root.voiceElapsedMs = Math.max(0, Math.round(Date.now() - root.voiceStartedAt))
+      if (root.voiceHeardUntil > 0 && Date.now() > root.voiceHeardUntil)
+        root.voiceHearing = false
+      if (!root.listening) return
+      if (root.voiceCaptureUntil > 0 && Date.now() > root.voiceCaptureUntil)
+        root.voiceCapturing = false
+    }
+  }
+
   Process {
     id: voiceProcess
     running: false
-    onExited: function() {
+    stdout: SplitParser {
+      onRead: function(line) { root.ingestVoiceLevel(line) }
+    }
+    stderr: SplitParser {
+      onRead: function(line) { root.noteVoiceError(line) }
+    }
+    onExited: function(exitCode) {
+      var failed = root.listening && exitCode !== 0
       if (root.listening) root.listening = false
+      if (root.voiceStopRequested) {
+        root.voiceStopRequested = false
+        if (root.voicePath !== "") transcribeDelay.restart()
+      } else if (failed) {
+        var err = String(root.voiceError || "").trim()
+        if (err !== "") root.setActiveError(AlfredModel.previewText(err, 240))
+      }
     }
   }
 

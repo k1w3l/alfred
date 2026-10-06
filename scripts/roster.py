@@ -7,6 +7,8 @@ run `hermes profile use`. Remote rows do not touch the local sticky profile.
 
   roster.py list
   roster.py set <key|profile-name>
+  roster.py face <key> <shape> <fill> <expression> [idle]
+  roster.py face-reset <key>
 """
 
 from __future__ import annotations
@@ -355,6 +357,88 @@ def decorate(rows: list[dict], state: dict, selected: str) -> None:
         row["globalShortcut"] = str(global_over.get(ident) or bind.get("global") or "")
 
 
+def normalize_shape(raw: str) -> str:
+    name = str(raw or "").strip().lower()
+    mapped = SHAPE_ALIAS.get(name, name)
+    if mapped not in SHAPES:
+        raise ValueError(f"unknown shape: {raw}")
+    return mapped
+
+
+def normalize_expression(raw: str) -> str:
+    name = str(raw or "").strip().lower()
+    if name not in EXPRESSIONS:
+        raise ValueError(f"unknown expression: {raw}")
+    return name
+
+
+def normalize_fill(raw: str) -> str:
+    text = str(raw or "").strip()
+    hexits = "0123456789abcdefABCDEF"
+    if len(text) != 7 or text[0] != "#" or any(ch not in hexits for ch in text[1:]):
+        raise ValueError(f"fill must be #RRGGBB: {raw}")
+    return text.lower()
+
+
+def _emoji_overrides(state: dict) -> dict:
+    current = state.get("profileEmoji") if isinstance(state, dict) else None
+    if isinstance(current, dict):
+        return dict(current)
+    return {}
+
+
+def resolve_face_key(state: dict, key: str) -> str:
+    rows, _warnings = build_roster(state)
+    resolved = resolve_key(rows, key)
+    if not resolved:
+        raise ValueError(f"unknown profile: {key}")
+    return resolved
+
+
+def set_face(key: str, shape: str, fill: str, expression: str, idle: str | None = None) -> None:
+    shape_n = normalize_shape(shape)
+    fill_n = normalize_fill(fill)
+    expr_n = normalize_expression(expression)
+    state = load_state()
+    if not isinstance(state, dict):
+        state = {}
+    resolved = resolve_face_key(state, key)
+    overrides = _emoji_overrides(state)
+    previous = overrides.get(resolved) if isinstance(overrides.get(resolved), dict) else {}
+    entry = {"shape": shape_n, "fill": fill_n, "expression": expr_n}
+    idle_text = str(idle).strip() if idle is not None else ""
+    if idle_text.lstrip("-").isdigit():
+        entry["idle"] = int(idle_text) % 3
+    elif str(previous.get("idle") or "").lstrip("-").isdigit():
+        entry["idle"] = int(previous["idle"]) % 3
+    overrides[resolved] = entry
+    state["profileEmoji"] = overrides
+    save_state(state)
+
+
+def reset_face(key: str) -> None:
+    state = load_state()
+    if not isinstance(state, dict):
+        state = {}
+    resolved = resolve_face_key(state, key)
+    overrides = _emoji_overrides(state)
+    if resolved not in overrides:
+        return
+    del overrides[resolved]
+    state["profileEmoji"] = overrides
+    save_state(state)
+
+
+def emit_roster() -> None:
+    state = load_state()
+    rows, warnings = build_roster(state)
+    selected = current_key(state, rows)
+    changed = sync_binds(state, rows)
+    state = load_state()
+    decorate(rows, state, selected)
+    print(json.dumps(payload(rows, selected, warnings, changed), ensure_ascii=False))
+
+
 def payload(rows: list[dict], selected: str, warnings: list[str], binds_changed: bool) -> dict:
     current = next((row for row in rows if row["key"] == selected), rows[0] if rows else None)
     if current is None:
@@ -412,18 +496,24 @@ def apply_selection(key: str) -> tuple[list[dict], str, list[str], bool]:
 
 def main() -> int:
     mode = sys.argv[1] if len(sys.argv) > 1 else "list"
-    arg = sys.argv[2] if len(sys.argv) > 2 else ""
     try:
         if mode == "set":
+            arg = sys.argv[2] if len(sys.argv) > 2 else ""
             rows, selected, warnings, changed = apply_selection(arg)
+            print(json.dumps(payload(rows, selected, warnings, changed), ensure_ascii=False))
+        elif mode == "face":
+            if len(sys.argv) not in (6, 7):
+                raise ValueError("usage: roster.py face <key> <shape> <fill> <expression> [idle]")
+            idle_arg = sys.argv[6] if len(sys.argv) == 7 else None
+            set_face(sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5], idle_arg)
+            emit_roster()
+        elif mode == "face-reset":
+            if len(sys.argv) != 3:
+                raise ValueError("usage: roster.py face-reset <key>")
+            reset_face(sys.argv[2])
+            emit_roster()
         else:
-            state = load_state()
-            rows, warnings = build_roster(state)
-            selected = current_key(state, rows)
-            changed = sync_binds(state, rows)
-            state = load_state()
-            decorate(rows, state, selected)
-        print(json.dumps(payload(rows, selected, warnings, changed), ensure_ascii=False))
+            emit_roster()
         return 0
     except Exception as exc:
         print(json.dumps({"ok": False, "error": str(exc), "current": "", "profiles": [], "warnings": []}))

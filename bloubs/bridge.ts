@@ -16,24 +16,37 @@ type Block = { state: StateId; duration: number }
 // A cycle that repeats or hands over must not end on the state the next
 // one starts with: setState() ignores a switch to the current state.
 const CYCLES: Record<string, Block[]> = {
-  // bloub-idle / -idle-2 / -idle-3: three different 10s films.
+  // Inspired by bloub-idle{1,2,3}-new.mp4 (10s each, 2026-10-05).
+  // Sleep stays out: that hop reads as a nap, not as rest.
+  // Holds sit above MIN_BLOCK / minDuration. Adjacent blocks, and the
+  // wrap from last to first, never share a state: setState ignores a
+  // no-op, so two idles in a row would freeze the face.
+  //
+  // Idle 1 (calm, squircle in the film): rest, wink, rest, a glance wide.
+  // The first rest is the settle; the wink is the beat; wide is the
+  // follow-through that hands back to idle. Loop 10.0s.
   idle0: [
-    { state: 'sleep', duration: 2.5 },
-    { state: 'wide', duration: 2.5 },
-    { state: 'idle', duration: 2.5 },
-    { state: 'wink', duration: 2.5 }
+    { state: 'idle', duration: 2.8 },
+    { state: 'wink', duration: 1.6 },
+    { state: 'idle', duration: 3.8 },
+    { state: 'wide', duration: 1.8 }
   ],
+  // Idle 2 (curious): rest, look around (egg), rest, then a hexagon lean.
+  // Egg is the glance; hexagon is the stretch before the loop sits again.
+  // Loop 10.0s.
   idle1: [
-    { state: 'sleep', duration: 2.5 },
-    { state: 'idle', duration: 2.5 },
-    { state: 'wide', duration: 2.5 },
-    { state: 'wink', duration: 2.5 }
+    { state: 'idle', duration: 3.2 },
+    { state: 'egg', duration: 1.8 },
+    { state: 'idle', duration: 3.4 },
+    { state: 'hexagon', duration: 1.6 }
   ],
+  // Idle 3 (playful): wink, sit, open the eyes, then a hexagon lean so
+  // the wrap back to wink is a morph, not a no-op. Loop 10.0s.
   idle2: [
-    { state: 'wink', duration: 2.5 },
-    { state: 'idle', duration: 2.5 },
-    { state: 'sleep', duration: 2.5 },
-    { state: 'wide', duration: 2.5 }
+    { state: 'wink', duration: 1.6 },
+    { state: 'idle', duration: 3.4 },
+    { state: 'wide', duration: 1.8 },
+    { state: 'hexagon', duration: 3.2 }
   ],
   // Kept so a hand-built play() can still ask. The director does not schedule them.
   start: [{ state: 'comet', duration: 2.5 }],
@@ -58,9 +71,9 @@ const CYCLES: Record<string, Block[]> = {
   end: [{ state: 'burst', duration: 2.5 }],
   // Voice: rest states only, so the attentive expression stays on the face.
   listening: [
-    { state: 'idle', duration: 2.4 },
+    { state: 'idle', duration: 3.4 },
     { state: 'wide', duration: 2.2 },
-    { state: 'idle', duration: 2.0 },
+    { state: 'idle', duration: 2.8 },
     { state: 'wink', duration: 1.6 }
   ]
 }
@@ -446,6 +459,55 @@ export function release(id: string) {
   players.delete(String(id || ''))
 }
 
+// Editor draft and swatches. A fixed idle pose at clock 0: the chosen
+// expression and shape show, and the idle cycle does not.
+// A fresh engine, never stored in `players` and never passed through `direct`,
+// so a still face cannot evict a live agent or reset that agent's engine.
+function stillTick(shapeId: string, expressionId: string, fill: string) {
+  const shape = SHAPE_BY_ID.get(shapeId)
+  const expression = EXPRESSION_BY_ID.get(expressionId) || null
+  const engine = new BotEngine(100, 'idle', shape ? shape.radii : null, expression)
+  engine.reset('idle', 0)
+  return present(engine.sample(0), fill, 'idle', 'idle')
+}
+
+function present(
+  frame: ReturnType<BotEngine['sample']>,
+  fill: string,
+  clip: string,
+  state: StateId
+) {
+  const ink = hexOf(fill)
+  const eyes = []
+  for (let i = 0; i < frame.eyes.length; i++) {
+    const eye = frame.eyes[i]!
+    eyes.push({ path: eye.d, alpha: eye.alpha, ...parseMatrix(eye.matrix) })
+  }
+  const arcsBack = []
+  const arcsFront = []
+  for (let i = 0; i < frame.arcs.length; i++) {
+    const arc = frame.arcs[i]!
+    arcsBack.push(arcRecord(arc, 'back'))
+    arcsFront.push(arcRecord(arc, 'front'))
+  }
+  const dots = []
+  for (let i = 0; i < frame.dots.length; i++) dots.push(dotRecord(frame.dots[i]!, ink))
+
+  return {
+    body: frame.bodyPath,
+    alpha: frame.bodyAlpha,
+    eyes,
+    arcsBack,
+    arcsFront,
+    dots,
+    dotsBehind: frame.dotsBehind,
+    span: pathSpan(frame.bodyPath),
+    notif: frame.notif ? circlePath(frame.notif.x, frame.notif.y, frame.notif.r) : '',
+    clip,
+    state
+  }
+}
+
 export function tick(
   id: string,
   nowMs: number,
@@ -461,10 +523,12 @@ export function tick(
   const key = String(id || 'blob')
   const shapeId = shapeIdOf(shapeRaw)
   const expressionId = expressionIdOf(expressionRaw, eyesRaw, mood)
-  const clock = (Number(nowMs) || 0) / 1000 + (Number(phase) || 0)
   // flow '' = free-running mood cycle (tray, other chips); 'compact'/'open'
-  // = directed by the agent's flow (ball, current chip).
+  // = directed by the agent's flow (ball, current chip); 'still' = fixed idle
+  // pose, off the player map.
   const flowMode = String(flow || '')
+  if (flowMode === 'still') return stillTick(shapeId, expressionId, fill)
+  const clock = (Number(nowMs) || 0) / 1000 + (Number(phase) || 0)
   let timeline: Timeline
   if (flowMode === 'compact' || flowMode === 'open') {
     const agentKey = key.indexOf('/') >= 0 ? key.slice(0, key.lastIndexOf('/')) : key
@@ -508,34 +572,5 @@ export function tick(
     player.state = placed.state
   }
 
-  const frame = player.engine.sample(clock)
-  const ink = hexOf(fill)
-  const eyes = []
-  for (let i = 0; i < frame.eyes.length; i++) {
-    const eye = frame.eyes[i]!
-    eyes.push({ path: eye.d, alpha: eye.alpha, ...parseMatrix(eye.matrix) })
-  }
-  const arcsBack = []
-  const arcsFront = []
-  for (let i = 0; i < frame.arcs.length; i++) {
-    const arc = frame.arcs[i]!
-    arcsBack.push(arcRecord(arc, 'back'))
-    arcsFront.push(arcRecord(arc, 'front'))
-  }
-  const dots = []
-  for (let i = 0; i < frame.dots.length; i++) dots.push(dotRecord(frame.dots[i]!, ink))
-
-  return {
-    body: frame.bodyPath,
-    alpha: frame.bodyAlpha,
-    eyes,
-    arcsBack,
-    arcsFront,
-    dots,
-    dotsBehind: frame.dotsBehind,
-    span: pathSpan(frame.bodyPath),
-    notif: frame.notif ? circlePath(frame.notif.x, frame.notif.y, frame.notif.r) : '',
-    clip: placed.clip,
-    state: placed.state
-  }
+  return present(player.engine.sample(clock), fill, placed.clip, placed.state)
 }

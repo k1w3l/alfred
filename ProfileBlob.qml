@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Shapes
+import qs.Commons
 import "BloubEngine.js" as Bloub
 
 // One bloub per agent. Paths stay in the engine's viewBox and a single matrix
@@ -35,6 +36,8 @@ Item {
   // "" = free-running mood cycle; "compact" / "open" = follow the agent's
   // state flow (working, outcome x3, notification, end).
   property string flow: ""
+  // Editor draft and swatches. The pose stays on the idle face at clock 0.
+  property bool still: false
   property real supersample: 5
 
   readonly property string playerId: (agentId !== "" ? agentId : shape + fill) + "/" + slot
@@ -57,22 +60,139 @@ Item {
     if (root.mood === "error" || root.mood === "listening") return "#ffd0d1"
     return "#ffffff"
   }
-  // Screen pixels. The 26px chips in the pill lost their fill under a 2px stroke,
-  // so the rim thins further below 36px. The traveling segment sits on that rim.
+  // Screen pixels. About a fifth under the previous 1.7 / 1.45 / 1.2.
+  // Below 36px the factor falls with width (26px → width/45, 16px sits on
+  // the 0.54 floor) so the chips and the tray lose a little more than the
+  // large face. The floor keeps the stroke visible. The traveling segment
+  // sits on that rim.
   readonly property real rimPx: {
-    var base = root.voice ? 1.7 : (root.marching ? 1.45 : 1.2)
-    if (root.width < 36) return base * Math.max(0.62, root.width / 42)
+    var base = root.voice ? 1.36 : (root.marching ? 1.16 : 0.96)
+    if (root.width < 36) return base * Math.max(0.54, root.width / 45)
     return base
   }
   readonly property real rimStroke: root.rimPx / Math.max(root.unit, 0.02)
   readonly property real marchStroke: root.rimStroke
-  // Drop shadow just outside the rim. Scaled with the face so the small chips
-  // keep a crescent without the halo swallowing the body.
-  readonly property real shadowPx: root.width < 36 ? 0.85 : 1.35
-  readonly property real shadowSpread: (root.shadowPx * 1.5) / Math.max(root.unit, 0.02)
-  readonly property real shadowShift: (root.shadowPx * 0.9) / Math.max(root.unit, 0.02)
+  // Soft lift under the rim. Several copies of the body step down-right and
+  // fade, in this same supersampled pass: a child blur is clipped by the
+  // layer. The ink follows the surface behind the blob. A light surface gets
+  // a near-black crescent at high opacity; a dark surface gets a cream
+  // crescent at a lower opacity, so the shape still separates.
+  //
+  // The surface is the first opaque ancestor paint (the pill, the menu
+  // sheet), else the shell window color (the bar). A Wayland layer does not
+  // expose the pixels behind a transparent window, so a fully transparent
+  // bar or the compact ball falls back to the theme: Color.bar.background
+  // on the tray, and the pill's Qt.darker(Color.background, 1.45) everywhere
+  // else. That fallback is the theme surface, not a sample of the wallpaper.
+  property int groundTick: 0
+  readonly property color themeTray: Color.bar.background
+  readonly property color themeSheet: Qt.darker(Color.background, 1.45)
+  readonly property color windowPaint: root.readWindowColor()
+  readonly property color ground: {
+    var _tick = root.groundTick
+    var _win = root.windowPaint
+    var _tray = root.themeTray
+    var _sheet = root.themeSheet
+    return root.resolveGround()
+  }
+  readonly property real groundLuminance: root.lumaOf(root.ground)
+  // Gamma-encoded luma, not linear. 0.5 is a mid gray.
+  readonly property bool groundLight: root.groundLuminance >= 0.5
+  readonly property color shadowColor: root.groundLight ? "#000000" : "#f4efe6"
+  readonly property var shadowWeightsOnLight: [0.58, 0.42, 0.30, 0.22, 0.15, 0.10, 0.065, 0.04]
+  readonly property var shadowWeightsOnDark: [0.42, 0.30, 0.22, 0.16, 0.11, 0.07, 0.045, 0.028]
+  readonly property var shadowWeights: root.groundLight ? root.shadowWeightsOnLight : root.shadowWeightsOnDark
+  readonly property real shadowReach: root.width < 22 ? 2.85 : (root.width < 36 ? 3.4 : 5.0)
+  readonly property real haloPx: root.width < 36 ? 0.7 : 1.05
+  readonly property real haloStroke: root.haloPx / Math.max(root.unit, 0.02)
   readonly property real bodyLoop: Math.max(8, (root.frame.span || 620) / Math.max(root.marchStroke, 0.5))
   property real march: 0
+  // Linear lap, plus a small speed swell. Position and velocity match at the
+  // seam, so the dash keeps moving when the loop wraps.
+  readonly property real marchPhase: root.march + 0.03 * Math.sin(root.march * 2 * Math.PI)
+
+  function asColor(value) {
+    if (value === undefined || value === null) return null
+    if (typeof value === "string") {
+      if (value.length < 1) return null
+      return Qt.color(value)
+    }
+    if (typeof value === "object" && value.r !== undefined && value.g !== undefined
+        && value.b !== undefined && value.a !== undefined)
+      return value
+    return null
+  }
+
+  function opaqueEnough(color) {
+    return color && color.a >= 0.55
+  }
+
+  function lumaOf(value) {
+    var color = root.asColor(value)
+    if (!color) return 0
+    return 0.299 * color.r + 0.587 * color.g + 0.114 * color.b
+  }
+
+  // Rectangle.color, a shell `background` color, or Overlay's `surface`.
+  // Qt Quick Controls expose `background` as an item; those are ignored.
+  function paintOf(node) {
+    if (!node) return null
+    var keys = ["color", "background", "surface"]
+    var i
+    for (i = 0; i < keys.length; i++) {
+      var key = keys[i]
+      if (!(key in node)) continue
+      var color = root.asColor(node[key])
+      if (root.opaqueEnough(color)) return color
+    }
+    return null
+  }
+
+  function readWindowColor() {
+    var win = null
+    try {
+      if (root.QsWindow && root.QsWindow.window) win = root.QsWindow.window
+    } catch (e) {
+      win = null
+    }
+    if (!win) {
+      try {
+        if (root.Window && root.Window.window) win = root.Window.window
+      } catch (e2) {
+        win = null
+      }
+    }
+    if (!win) return "transparent"
+    try {
+      if (win.color === undefined || win.color === null) return "transparent"
+      return win.color
+    } catch (e3) {
+      return "transparent"
+    }
+  }
+
+  function resolveGround() {
+    var node = root.parent
+    var guard = 0
+    while (node && guard < 32) {
+      var paint = root.paintOf(node)
+      if (paint) return paint
+      node = node.parent
+      guard++
+    }
+    var win = root.asColor(root.windowPaint)
+    if (root.opaqueEnough(win)) return win
+    if (root.slot === "tray") return root.themeTray
+    return root.themeSheet
+  }
+
+  function shadowMatrix(index) {
+    var steps = root.shadowWeights.length
+    var t = (index + 1) / steps
+    var u = Math.max(root.unit, 0.02)
+    var reach = root.shadowReach
+    return root.mapOf(1, 0, 0, 1, reach * 0.28 * t / u, reach * t / u)
+  }
   property var frame: ({
     body: "",
     alpha: 1,
@@ -116,35 +236,66 @@ Item {
     return Math.max(6, span / Math.max(width, 0.05))
   }
 
+  function sample() {
+    root.frame = Bloub.tick(
+      root.playerId,
+      root.still ? 0 : Date.now(),
+      root.shape,
+      root.voice ? "attentif" : root.expression,
+      root.pose !== "" ? root.pose : root.mood,
+      root.idleVariant,
+      root.still ? 0 : root.phase,
+      String(root.fill),
+      root.eyes,
+      root.still ? "still" : root.flow
+    )
+  }
+
+  // A picked face has to redraw, but the pose must not march forward.
+  function sampleStill() {
+    if (!root.still || !root.visible || root.width <= 2 || root.height <= 2) return
+    root.sample()
+  }
+
   NumberAnimation on march {
     from: 0
     to: 1
     duration: 1400
     loops: Animation.Infinite
     easing.type: Easing.Linear
-    running: root.marching && root.visible && root.width > 2
+    running: !root.still && root.marching && root.visible && root.width > 2
   }
 
   Timer {
     interval: 16
     repeat: true
+    running: !root.still && root.visible && root.width > 2 && root.height > 2
+    triggeredOnStart: true
+    onTriggered: root.sample()
+  }
+
+  // Ancestor paint is read from JS, which does not always subscribe to a
+  // color that appears later (a Loader, the compact pill turning opaque).
+  // The theme colors and the window color are real bindings; this tick
+  // covers the rest. still:true keeps the pose pinned and only refreshes
+  // the ground.
+  Timer {
+    interval: 240
+    repeat: true
     running: root.visible && root.width > 2 && root.height > 2
     triggeredOnStart: true
-    onTriggered: {
-      root.frame = Bloub.tick(
-        root.playerId,
-        Date.now(),
-        root.shape,
-        root.voice ? "attentif" : root.expression,
-        root.pose !== "" ? root.pose : root.mood,
-        root.idleVariant,
-        root.phase,
-        String(root.fill),
-        root.eyes,
-        root.flow
-      )
-    }
+    onTriggered: root.groundTick = root.groundTick + 1
   }
+
+  onShapeChanged: root.sampleStill()
+  onFillChanged: root.sampleStill()
+  onExpressionChanged: root.sampleStill()
+  onEyesChanged: root.sampleStill()
+  onWidthChanged: root.sampleStill()
+  onHeightChanged: root.sampleStill()
+  onStillChanged: root.sampleStill()
+  onVisibleChanged: root.sampleStill()
+  Component.onCompleted: root.sampleStill()
 
   Component.onDestruction: Bloub.release(root.playerId)
 
@@ -195,20 +346,21 @@ Item {
     }
   }
 
-  Shape {
-    anchors.fill: parent
-    antialiasing: true
-    transformOrigin: Item.TopLeft
-    preferredRendererType: Shape.CurveRenderer
-    opacity: 0.5 * root.frame.alpha
-    transform: Matrix4x4 { matrix: root.mapOf(1, 0, 0, 1, root.shadowShift, root.shadowShift * 1.35) }
-    ShapePath {
-      fillColor: "#000000"
-      strokeColor: "#000000"
-      strokeWidth: root.shadowSpread
-      joinStyle: ShapePath.RoundJoin
-      capStyle: ShapePath.RoundCap
-      PathSvg { path: root.frame.body || "M0 0" }
+  Repeater {
+    model: root.shadowWeights.length
+    Shape {
+      required property int index
+      anchors.fill: parent
+      antialiasing: true
+      transformOrigin: Item.TopLeft
+      preferredRendererType: Shape.CurveRenderer
+      opacity: root.shadowWeights[index] * root.frame.alpha
+      transform: Matrix4x4 { matrix: root.shadowMatrix(index) }
+      ShapePath {
+        fillColor: root.shadowColor
+        strokeColor: "transparent"
+        PathSvg { path: root.frame.body || "M0 0" }
+      }
     }
   }
 
@@ -238,7 +390,7 @@ Item {
       strokeWidth: root.marching ? root.marchStroke : 0
       strokeStyle: ShapePath.DashLine
       dashPattern: [root.bodyLoop * 0.36, root.bodyLoop * 0.64]
-      dashOffset: -root.march * root.bodyLoop
+      dashOffset: -root.marchPhase * root.bodyLoop
       joinStyle: ShapePath.RoundJoin
       capStyle: ShapePath.RoundCap
       PathSvg { path: root.frame.body || "M0 0" }
@@ -292,7 +444,7 @@ Item {
       ShapePath {
         fillColor: ink ? "#80000000" : "transparent"
         strokeColor: ink ? "#80000000" : "transparent"
-        strokeWidth: ink ? root.shadowSpread / root.xformScale(dot) : 0
+        strokeWidth: ink ? root.haloStroke / root.xformScale(dot) : 0
         joinStyle: ShapePath.RoundJoin
         capStyle: ShapePath.RoundCap
         PathSvg { path: dot && dot.path ? dot.path : "M0 0" }
@@ -316,7 +468,7 @@ Item {
         strokeWidth: ink && root.marching ? root.marchStroke / root.xformScale(dot) : 0
         strokeStyle: ShapePath.DashLine
         dashPattern: [loop * 0.42, loop * 0.58]
-        dashOffset: -root.march * loop
+        dashOffset: -root.marchPhase * loop
         joinStyle: ShapePath.RoundJoin
         capStyle: ShapePath.RoundCap
         PathSvg { path: dot && dot.path ? dot.path : "M0 0" }

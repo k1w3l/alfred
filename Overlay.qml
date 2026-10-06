@@ -12,6 +12,180 @@ import "ComposerTheme.js" as Theme
 Item {
   id: root
 
+  // Coucou cubic-bezier(.32, 1.22, .42, 1): open overshoots, close is quicker and does not.
+  component SheetEase: NumberAnimation {
+    property bool closing: false
+    duration: closing ? 180 : 240
+    easing.type: closing ? Easing.OutCubic : Easing.BezierSpline
+    easing.bezierCurve: [0.32, 1.22, 0.42, 1.0, 1.0, 1.0]
+  }
+
+  // Swatch delegates cannot see document ids. Every field is copied off
+  // modelData; the press only emits this signal.
+  component FaceSwatch: Item {
+    id: swatch
+    required property string kind
+    required property string value
+    required property string shape
+    required property string fill
+    required property string expression
+    required property string eyes
+    required property string agentId
+    required property bool chosen
+    required property int idle
+    required property real phase
+    required property int size
+    required property int blob
+    required property int radius
+    required property string label
+    required property int labelSize
+    required property string labelFont
+    required property color labelColor
+    required property bool still
+    property bool wired: false
+    signal picked(string kind, string value)
+    width: swatch.size
+    height: swatch.blob + swatch.labelSize + swatch.radius
+
+    Rectangle {
+      anchors.fill: parent
+      radius: swatch.radius
+      color: swatchHit.containsMouse ? Util.alpha(Color.foreground, 0.08) : "transparent"
+      border.width: swatch.chosen ? 1 : 0
+      border.color: Util.alpha(Color.accent, 0.9)
+    }
+
+    Column {
+      anchors.centerIn: parent
+      width: parent.width
+      spacing: 1
+
+      ProfileBlob {
+        anchors.horizontalCenter: parent.horizontalCenter
+        width: swatch.blob
+        height: swatch.blob
+        agentId: swatch.agentId
+        slot: "swatch"
+        shape: swatch.shape
+        fill: swatch.fill
+        expression: swatch.expression
+        idleVariant: swatch.idle
+        phase: swatch.phase
+        eyes: swatch.eyes
+        mood: "idle"
+        still: swatch.still
+      }
+
+      Text {
+        width: parent.width
+        horizontalAlignment: Text.AlignHCenter
+        elide: Text.ElideRight
+        textFormat: Text.PlainText
+        text: swatch.label
+        color: swatch.labelColor
+        font.family: swatch.labelFont
+        font.pixelSize: swatch.labelSize
+      }
+    }
+
+    MouseArea {
+      id: swatchHit
+      anchors.fill: parent
+      hoverEnabled: true
+      cursorShape: Qt.PointingHandCursor
+      preventStealing: true
+      onPressed: function(mouse) {
+        mouse.accepted = true
+        swatch.picked(swatch.kind, swatch.value)
+      }
+    }
+  }
+
+  component FaceRow: Column {
+    id: row
+    required property string caption
+    required property var swatches
+    required property int gap
+    required property int inset
+    required property color labelColor
+    required property string labelFont
+    required property int labelSize
+    required property int rowSpacing
+    required property int below
+    property bool wired: false
+    signal picked(string kind, string value)
+    width: parent.width
+    spacing: row.rowSpacing
+    bottomPadding: row.below
+
+    Text {
+      width: parent.width
+      leftPadding: row.inset
+      textFormat: Text.PlainText
+      text: row.caption
+      color: row.labelColor
+      font.family: row.labelFont
+      font.pixelSize: row.labelSize
+      font.bold: true
+    }
+
+    Flow {
+      x: row.inset
+      width: Math.max(0, parent.width - row.inset)
+      spacing: row.gap
+
+      Repeater {
+        model: row.swatches
+        delegate: FaceSwatch {
+          required property var modelData
+          kind: modelData.kind
+          value: modelData.value
+          shape: modelData.shape
+          fill: modelData.fill
+          expression: modelData.expression
+          eyes: modelData.eyes
+          agentId: modelData.agentId
+          chosen: modelData.chosen
+          idle: modelData.idle
+          phase: modelData.phase
+          size: modelData.size
+          blob: modelData.blob
+          radius: modelData.radius
+          label: modelData.label
+          labelSize: modelData.labelSize
+          labelFont: modelData.labelFont
+          labelColor: modelData.labelColor
+          still: modelData.still
+        }
+        onItemAdded: function(index, item) {
+          if (item.wired) return
+          item.wired = true
+          item.picked.connect(function(kind, value) { row.picked(kind, value) })
+        }
+      }
+    }
+  }
+
+  function trackSheet(sheet) {
+    if (!sheet || !sheet.motionReady) return
+    var next = sheet.targetHeight
+    sheet.closing = next + 0.5 < sheet.height
+    sheet.shownHeight = next
+    var open = next > 0.5
+    sheet.shownOpacity = open ? 1 : 0
+    sheet.shownScale = open ? 1 : 0.98
+  }
+
+  function armSheet(sheet) {
+    var next = sheet.targetHeight
+    var open = next > 0.5
+    sheet.shownHeight = next
+    sheet.shownOpacity = open ? 1 : 0
+    sheet.shownScale = open ? 1 : 0.98
+    sheet.closing = false
+    sheet.motionReady = true
+  }
+
   property var shell: null
   property var manifest: null
   property var service: null
@@ -74,6 +248,21 @@ Item {
   property real nowMs: Date.now()
   property string menuParent: ""
   property string menuKind: ""
+  property string faceKey: ""
+  property string faceLabel: ""
+  property string faceShape: "cercle"
+  property string faceFill: "#0a0a0c"
+  property string faceExpression: "neutre"
+  property int faceIdle: 0
+  property real facePhase: 0
+  readonly property var faceShapes: ["cercle", "galet", "squircle", "capsule", "triangle", "hexagone", "nuage", "goutte"]
+  readonly property var faceShapeLabels: ["Circle", "Pebble", "Squircle", "Capsule", "Triangle", "Hexagon", "Cloud", "Droplet"]
+  readonly property var faceColors: ["#0a0a0c", "#8b5e3c", "#e8483f", "#f08a24", "#f0b429", "#3ecf8e", "#2fbfa0", "#3b93f0", "#8b5cf6", "#e152b0", "#a3a3a3"]
+  readonly property var faceColorLabels: ["Ink", "Brown", "Red", "Orange", "Amber", "Green", "Turquoise", "Blue", "Purple", "Pink", "Grey"]
+  readonly property var faceExpressions: ["neutre", "attentif", "surpris", "excite", "heureux", "hilare", "colere", "triste", "effraye", "mefiant", "confus", "curieux", "fier", "timide", "blase", "somnolent"]
+  readonly property var faceExpressionLabels: ["Neutral", "Attentive", "Surprised", "Excited", "Happy", "Laughing", "Angry", "Sad", "Scared", "Suspicious", "Confused", "Curious", "Proud", "Shy", "Unimpressed", "Sleepy"]
+  readonly property var faceIdles: ["0", "1", "2"]
+  readonly property var faceIdleLabels: ["Idle", "Idle 2", "Idle 3"]
   property string pickerMode: ""
   readonly property bool menuOpen: root.menuKind !== ""
   readonly property bool pickerOpen: root.pickerMode !== ""
@@ -136,30 +325,57 @@ Item {
     return root.moodColor
   }
   readonly property string fontFamily: Style.font.family
-  // Logical pixels shrink on a scaled 4K panel; sizing the ball by the
-  // screen's short side (1080 = 1) keeps it the same on every monitor.
-  readonly property real screenFit: {
+  // Pill scale follows the Hyprland output scale of activeScreen.
+  // Screen.width/height are logical (DP-3 is 2560x1440) and devicePixelRatio
+  // is the integer Wayland buffer scale (2 there). Omarchy uses that ratio
+  // only for image sourceSize. Hyprland scale is 1.5 on that 4K panel and 1
+  // on the 1080p outputs, including HDMI-A-1 in portrait.
+  readonly property real uiScale: {
     var s = root.activeScreen
-    var side = s ? Math.min(s.width, s.height) : 1080
-    return Math.max(0.75, Math.min(2, side / 1080))
+    var name = s ? String(s.name || "") : ""
+    var mons = Hyprland.monitors && Hyprland.monitors.values ? Hyprland.monitors.values : []
+    var i
+    for (i = 0; i < mons.length; i++) {
+      var m = mons[i]
+      if (!m || String(m.name || "") !== name) continue
+      var sc = Number(m.scale)
+      if (isFinite(sc) && sc > 0) return sc
+    }
+    return 1
   }
-  readonly property int ballSize: Math.round(Math.max(Style.space(60), Style.font.title + Style.space(34)) * root.screenFit)
-  readonly property int agentSize: Style.space(Theme.primaryPx())
+
+  // Style.space already includes the global spacing/font scale. Divide it
+  // back out and apply uiScale so only the monitor factor is added.
+  function px(n) {
+    var g = Number(Style.spacing.scale)
+    if (!(g > 0)) g = 1
+    var v = Style.space(n) * root.uiScale / g
+    if (!isFinite(v) || v <= 0) return 0
+    return Math.round(v)
+  }
+
+  function fontPx(size) {
+    var n = Number(size)
+    if (!isFinite(n) || n <= 0) return 0
+    return Math.max(1, Math.round(n * root.uiScale))
+  }
+  readonly property int ballSize: Math.max(root.px(60), root.fontPx(Style.font.title) + root.px(34))
+  readonly property int agentSize: root.px(Theme.primaryPx())
   readonly property bool ballOrbits: root.compact && (root.mood === "busy" || root.mood === "listening")
-  readonly property int ballPad: root.ballOrbits ? Math.round(Style.space(18) * root.screenFit) : 0
+  readonly property int ballPad: root.ballOrbits ? root.px(18) : 0
   // the compact ball swells a little while its agent works
   readonly property int ballFace: root.compact && root.mood === "busy" ? Math.round(root.ballSize * 1.3) : root.ballSize
-  readonly property int pillWidth: root.focused ? Style.space(720) : root.ballFace + root.ballPad * 2
-  readonly property int composerTextHeight: composerInput ? Math.min(Math.ceil(composerInput.implicitHeight), Style.space(Theme.composerMaxPx())) : Style.font.body
+  readonly property int pillWidth: root.focused ? root.px(720) : root.ballFace + root.ballPad * 2
+  readonly property int composerTextHeight: composerInput ? Math.min(Math.ceil(composerInput.implicitHeight), root.px(Theme.composerMaxPx())) : root.fontPx(Style.font.body)
   readonly property bool composerMultiline: composerInput ? composerInput.lineCount > 1 : false
   readonly property int pillHeight: root.focused
     ? root.surfacePadY * 2 + root.controlGap + Math.max(root.composerTextHeight, root.agentSize) + root.agentSize
     : root.ballFace + root.ballPad * 2
   readonly property int rowAlign: root.composerMultiline ? Qt.AlignBottom : Qt.AlignVCenter
-  readonly property int controlGap: Style.space(Theme.gapPx())
-  readonly property int surfacePadX: Style.space(Theme.padXPx())
-  readonly property int surfacePadY: Style.space(Theme.padYPx())
-  readonly property int bandMaxHeight: Math.max(Style.space(280), Math.min(Style.space(560),
+  readonly property int controlGap: root.px(Theme.gapPx())
+  readonly property int surfacePadX: root.px(Theme.padXPx())
+  readonly property int surfacePadY: root.px(Theme.padYPx())
+  readonly property int bandMaxHeight: Math.max(root.px(280), Math.min(root.px(560),
     Math.round((root.activeScreen ? root.activeScreen.height : 1080) * 0.55)))
   property string hudScreenName: ""
   readonly property var activeScreen: root.screenByName(root.hudScreenName) || root.focusedScreen()
@@ -276,6 +492,7 @@ Item {
       model: root.modelOptions.length === 0 ? "NO CACHED MODELS" : "MODEL",
       effort: "REASONING",
       profile: "PROFILE",
+      face: root.faceLabel !== "" ? root.faceLabel : "FACE",
       gateway: "GATEWAY",
       shortcuts: "KEYBOARD SHORTCUTS",
       sessions: root.gatewayKind === "local" ? "PREVIOUS SESSIONS" : "PREVIOUS SESSIONS · THIS DEVICE"
@@ -307,10 +524,60 @@ Item {
 
   function menuBack() {
     root.cancelCapture()
+    if (root.menuKind === "face") {
+      root.menuKind = "profile"
+      root.rebuildMenu()
+      return
+    }
     var parentKind = root.menuParent
     root.menuParent = ""
     root.menuKind = parentKind
     root.rebuildMenu()
+  }
+
+  function eyesFor(expression) {
+    var expr = String(expression || "")
+    if (expr === "colere" || expr === "mefiant") return "angry"
+    if (expr === "blase" || expr === "somnolent" || expr === "triste") return "pause"
+    return "soft"
+  }
+
+  function openFaceEditor(row) {
+    var data = row || {}
+    var key = String(data.key || data.id || "")
+    if (key === "") return
+    root.faceKey = key
+    root.faceLabel = String(data.label || key)
+    root.faceShape = String(data.shape || "cercle")
+    root.faceFill = String(data.fill || "#0a0a0c").toLowerCase()
+    root.faceExpression = String(data.expression || "neutre")
+    root.faceIdle = Number(data.idle || 0)
+    root.facePhase = Number(data.phase || 0)
+    root.menuKind = "face"
+    root.rebuildMenu()
+  }
+
+  function pickFace(kind, value) {
+    var which = String(kind || "")
+    var next = String(value || "")
+    if (which === "shape") root.faceShape = next
+    else if (which === "fill") root.faceFill = next.toLowerCase()
+    else if (which === "expression") root.faceExpression = next
+    else if (which === "idle") root.faceIdle = Number(next) || 0
+  }
+
+  function saveFace() {
+    if (root.faceKey === "") return
+    if (alfred && typeof alfred.setFace === "function")
+      alfred.setFace(root.faceKey, root.faceShape, root.faceFill, root.faceExpression, root.faceIdle)
+    root.menuBack()
+  }
+
+  function clearFace() {
+    if (root.faceKey === "") return
+    if (alfred && typeof alfred.resetFace === "function")
+      alfred.resetFace(root.faceKey)
+    root.menuBack()
   }
 
   function toggleSettings() {
@@ -494,7 +761,7 @@ Item {
     var y = 0
     var i
     for (i = 0; i < rows.length; i++) {
-      var h = rows[i].rowType === "header" ? Style.space(22) : Style.space(40)
+      var h = rows[i].rowType === "header" ? root.px(22) : root.px(40)
       if (rows[i].itemIndex === itemIndex) return y
       y += h
     }
@@ -715,7 +982,7 @@ Item {
       return
     }
     if (root.menuOpen) {
-      if (root.menuParent !== "") root.menuBack()
+      if (root.menuKind === "face" || root.menuParent !== "") root.menuBack()
       else root.closeMenus()
       return
     }
@@ -794,8 +1061,8 @@ Item {
     property bool opened: false
     signal activated()
 
-    height: parent ? parent.height : Style.space(28)
-    width: chipRow.implicitWidth + Style.space(20)
+    height: parent ? parent.height : root.px(28)
+    width: chipRow.implicitWidth + root.px(20)
     radius: height / 2
     color: chip.opened ? Util.alpha(Color.accent, 0.20) : (chipHit.containsMouse ? Util.alpha(Color.foreground, 0.10) : root.sheet)
     border.width: 1
@@ -804,14 +1071,14 @@ Item {
     Row {
       id: chipRow
       anchors.centerIn: parent
-      spacing: Style.space(6)
+      spacing: root.px(6)
 
       Text {
         textFormat: Text.PlainText
         text: Theme.glyph(chip.icon)
         color: chipHit.containsMouse || chip.opened ? root.foreground : root.dim
         font.family: menuCodicon.name !== "" ? menuCodicon.name : "codicon"
-        font.pixelSize: Style.space(Theme.iconPx())
+        font.pixelSize: root.px(Theme.iconPx())
         anchors.verticalCenter: parent.verticalCenter
       }
 
@@ -820,7 +1087,7 @@ Item {
         text: chip.label
         color: chipHit.containsMouse || chip.opened ? root.foreground : root.dim
         font.family: root.fontFamily
-        font.pixelSize: Style.font.caption
+        font.pixelSize: root.fontPx(Style.font.caption)
         anchors.verticalCenter: parent.verticalCenter
       }
     }
@@ -915,7 +1182,7 @@ Item {
   }
 
   function updateFollowThread() {
-    if (bandFlick) root.followThread = bandFlick.distanceToEnd <= Style.space(24)
+    if (bandFlick) root.followThread = bandFlick.distanceToEnd <= root.px(24)
   }
 
   function pageThread(direction) {
@@ -972,7 +1239,7 @@ Item {
     var y = root.slashRowY(root.slashIndex)
     var top = slashList.contentY
     var bottom = top + slashList.height
-    var rowH = Style.space(40)
+    var rowH = root.px(40)
     if (y < top) slashList.contentY = Math.max(0, y)
     else if (y + rowH > bottom) slashList.contentY = Math.max(0, y + rowH - slashList.height)
   }
@@ -1056,7 +1323,7 @@ Item {
       spacing: 0
       anchors.horizontalCenter: parent.horizontalCenter
       anchors.top: parent.top
-      anchors.topMargin: Style.bar.sizeHorizontal + Style.gapsOut + Style.space(12)
+      anchors.topMargin: Style.bar.sizeHorizontal + Style.gapsOut + root.px(12)
       z: 2
 
       Behavior on width {
@@ -1065,16 +1332,43 @@ Item {
 
       Rectangle {
         id: pill
+        property real targetHeight: root.pillHeight
+        property real shownHeight: 0
+        property bool motionReady: false
+        property bool closing: false
+        property bool ringShown: false
+        property real ringOpacity: 0
+        property bool ringReady: false
+        readonly property bool ringRunning: !root.compact && (root.listening || (root.mood === "busy" && !root.awaitingPermission))
+
         width: parent.width
-        height: root.pillHeight
+        height: motionReady ? shownHeight : targetHeight
+        onTargetHeightChanged: {
+          if (!motionReady) return
+          closing = targetHeight + 0.5 < height
+          shownHeight = targetHeight
+        }
+        onRingRunningChanged: {
+          if (!ringReady) return
+          if (ringRunning) ringShown = true
+          ringOpacity = ringRunning ? 1 : 0
+        }
+        Component.onCompleted: {
+          shownHeight = targetHeight
+          motionReady = true
+          if (ringRunning) ringShown = true
+          ringOpacity = ringRunning ? 1 : 0
+          ringReady = true
+        }
 
         Behavior on height {
-          NumberAnimation { duration: 120; easing.type: Easing.OutCubic }
+          enabled: pill.motionReady
+          SheetEase { closing: pill.closing }
         }
-        readonly property bool ringRunning: !root.compact && (root.listening || (root.mood === "busy" && !root.awaitingPermission))
-        radius: root.compact ? height / 2 : Style.space(Theme.arcRadiusPx())
+
+        radius: root.compact ? height / 2 : root.px(Theme.arcRadiusPx())
         color: root.compact ? "transparent" : root.surface
-        border.width: root.compact || pill.ringRunning ? 0 : (root.mood === "idle" ? 1 : 2)
+        border.width: root.compact ? 0 : 1
         border.color: root.rim
         clip: !root.compact
 
@@ -1082,8 +1376,22 @@ Item {
           anchors.fill: parent
           z: 0
           radius: pill.radius
-          running: pill.ringRunning
+          running: pill.ringShown
+          opacity: pill.ringOpacity
           accent: root.listening ? Theme.moodRed() : root.foreground
+          ringWidth: 1.5 * root.uiScale
+          level: root.listening && alfred ? alfred.audioLevel : -1
+
+          Behavior on opacity {
+            enabled: pill.ringReady
+            NumberAnimation {
+              duration: 180
+              easing.type: Easing.OutCubic
+              onFinished: {
+                if (!pill.ringRunning) pill.ringShown = false
+              }
+            }
+          }
         }
 
         ProfileBlob {
@@ -1105,10 +1413,18 @@ Item {
           selected: false
 
           Behavior on width {
-            NumberAnimation { duration: 260; easing.type: Easing.OutCubic }
+            NumberAnimation {
+              duration: 240
+              easing.type: Easing.BezierSpline
+              easing.bezierCurve: [0.32, 1.22, 0.42, 1.0, 1.0, 1.0]
+            }
           }
           Behavior on height {
-            NumberAnimation { duration: 260; easing.type: Easing.OutCubic }
+            NumberAnimation {
+              duration: 240
+              easing.type: Easing.BezierSpline
+              easing.bezierCurve: [0.32, 1.22, 0.42, 1.0, 1.0, 1.0]
+            }
           }
         }
 
@@ -1143,6 +1459,8 @@ Item {
             spacing: root.controlGap
 
             HudButton {
+              uiScale: root.uiScale
+
               icon: "add"
               Layout.alignment: root.rowAlign
               opened: root.menuKind === "attach"
@@ -1156,7 +1474,7 @@ Item {
               id: composerFlick
               Layout.fillWidth: true
               Layout.preferredWidth: 0
-              Layout.minimumWidth: Style.space(Theme.inputMinPx())
+              Layout.minimumWidth: root.px(Theme.inputMinPx())
               Layout.preferredHeight: root.composerTextHeight
               Layout.alignment: Qt.AlignVCenter
               clip: true
@@ -1173,12 +1491,12 @@ Item {
                 placeholderText: root.busy ? (root.profileLabel + " is working…") : (root.transcribing ? "Transcribing…" : (root.listening ? "Listening…" : (root.gatewayActive ? ("Ask " + root.profileLabel) : "Gateway down")))
                 placeholderTextColor: root.dim
                 font.family: root.fontFamily
-                font.pixelSize: Style.font.body
+                font.pixelSize: root.fontPx(Style.font.body)
                 background: Item {}
-                leftPadding: Style.space(4)
-                rightPadding: Style.space(4)
-                topPadding: Style.space(2)
-                bottomPadding: Style.space(2)
+                leftPadding: root.px(4)
+                rightPadding: root.px(4)
+                topPadding: root.px(2)
+                bottomPadding: root.px(2)
                 readOnly: root.busy
                 enabled: root.focused && !root.busy
                 onTextChanged: root.syncSlash()
@@ -1284,6 +1602,8 @@ Item {
             }
 
             HudButton {
+              uiScale: root.uiScale
+
               visible: root.busy
               icon: root.previewOpen ? "eye-closed" : "eye"
               Layout.alignment: root.rowAlign
@@ -1293,6 +1613,8 @@ Item {
             }
 
             HudButton {
+              uiScale: root.uiScale
+
               wide: true
               Layout.alignment: root.rowAlign
               icon: "settings-gear"
@@ -1304,6 +1626,8 @@ Item {
             }
 
             HudButton {
+              uiScale: root.uiScale
+
               icon: root.listening ? "stop" : "mic"
               Layout.alignment: root.rowAlign
               active: root.listening
@@ -1312,6 +1636,8 @@ Item {
             }
 
             HudButton {
+              uiScale: root.uiScale
+
               primary: true
               Layout.alignment: root.rowAlign
               icon: root.showVoicePrimary ? "audio-lines" : (root.showStop ? "stop" : "arrow-up")
@@ -1321,6 +1647,8 @@ Item {
             }
 
             HudButton {
+              uiScale: root.uiScale
+
               icon: "screen-normal"
               Layout.alignment: root.rowAlign
               tooltipText: "Exit HUD"
@@ -1333,7 +1661,7 @@ Item {
       Item {
         id: chipWrap
         width: parent.width
-        height: root.focused && root.attachments.length > 0 ? chipRow.implicitHeight + Style.space(8) : 0
+        height: root.focused && root.attachments.length > 0 ? chipRow.implicitHeight + root.px(8) : 0
         clip: true
         opacity: height > 0 ? 1 : 0
 
@@ -1344,8 +1672,8 @@ Item {
         Flow {
           id: chipRow
           width: parent.width
-          y: Style.space(8)
-          spacing: Style.space(6)
+          y: root.px(8)
+          spacing: root.px(6)
 
           Repeater {
             model: root.attachments
@@ -1353,8 +1681,8 @@ Item {
             Rectangle {
               id: attachChip
               required property var modelData
-              height: Style.space(26)
-              width: attachInner.implicitWidth + Style.space(18)
+              height: root.px(26)
+              width: attachInner.implicitWidth + root.px(18)
               radius: height / 2
               color: attachChipHit.containsMouse ? Util.alpha(Color.accent, 0.24) : Util.alpha(Color.accent, 0.14)
               border.width: 1
@@ -1374,26 +1702,26 @@ Item {
                 id: attachInner
                 anchors.verticalCenter: parent.verticalCenter
                 anchors.left: parent.left
-                anchors.leftMargin: Style.space(9)
-                spacing: Style.space(6)
+                anchors.leftMargin: root.px(9)
+                spacing: root.px(6)
 
                 Text {
                   textFormat: Text.PlainText
                   text: Theme.glyph(AlfredModel.attachmentIcon(attachChip.modelData))
                   color: Color.accent
                   font.family: menuCodicon.name !== "" ? menuCodicon.name : "codicon"
-                  font.pixelSize: Style.space(13)
+                  font.pixelSize: root.px(13)
                   anchors.verticalCenter: parent.verticalCenter
                 }
 
                 Text {
                   textFormat: Text.PlainText
                   text: AlfredModel.fileName(attachChip.modelData)
-                  width: Math.min(implicitWidth, Style.space(220))
+                  width: Math.min(implicitWidth, root.px(220))
                   elide: Text.ElideMiddle
                   color: root.foreground
                   font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
+                  font.pixelSize: root.fontPx(Style.font.caption)
                   anchors.verticalCenter: parent.verticalCenter
                 }
 
@@ -1402,7 +1730,7 @@ Item {
                   text: Theme.glyph("close")
                   color: chipClose.containsMouse ? Color.urgent : root.dim
                   font.family: menuCodicon.name !== "" ? menuCodicon.name : "codicon"
-                  font.pixelSize: Style.space(12)
+                  font.pixelSize: root.px(12)
                   anchors.verticalCenter: parent.verticalCenter
 
                   MouseArea {
@@ -1425,8 +1753,8 @@ Item {
 
           Rectangle {
             visible: root.attachments.length > 1
-            height: Style.space(26)
-            width: clearInner.implicitWidth + Style.space(18)
+            height: root.px(26)
+            width: clearInner.implicitWidth + root.px(18)
             radius: height / 2
             color: clearHit.containsMouse ? Util.alpha(Color.urgent, 0.16) : "transparent"
             border.width: 1
@@ -1435,14 +1763,14 @@ Item {
             Row {
               id: clearInner
               anchors.centerIn: parent
-              spacing: Style.space(6)
+              spacing: root.px(6)
 
               Text {
                 textFormat: Text.PlainText
                 text: Theme.glyph("clear-all")
                 color: clearHit.containsMouse ? Color.urgent : root.dim
                 font.family: menuCodicon.name !== "" ? menuCodicon.name : "codicon"
-                font.pixelSize: Style.space(12)
+                font.pixelSize: root.px(12)
                 anchors.verticalCenter: parent.verticalCenter
               }
 
@@ -1451,7 +1779,7 @@ Item {
                 text: "Clear all"
                 color: clearHit.containsMouse ? Color.urgent : root.dim
                 font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
+                font.pixelSize: root.fontPx(Style.font.caption)
                 anchors.verticalCenter: parent.verticalCenter
               }
             }
@@ -1472,7 +1800,7 @@ Item {
       Item {
         id: chatStripWrap
         width: parent.width
-        height: root.showChatStrip ? Style.space(34) : 0
+        height: root.showChatStrip ? root.px(34) : 0
         clip: true
         opacity: height > 0 ? 1 : 0
         z: 21
@@ -1483,7 +1811,7 @@ Item {
 
         Flickable {
           anchors.fill: parent
-          anchors.topMargin: Style.space(6)
+          anchors.topMargin: root.px(6)
           contentWidth: chatRow.implicitWidth
           contentHeight: height
           clip: true
@@ -1494,7 +1822,7 @@ Item {
           Row {
             id: chatRow
             height: parent.height
-            spacing: Style.space(6)
+            spacing: root.px(6)
 
             ActionChip {
               icon: "add"
@@ -1514,7 +1842,7 @@ Item {
             Rectangle {
               visible: root.chats.length > 1
               width: 1
-              height: parent.height - Style.space(8)
+              height: parent.height - root.px(8)
               anchors.verticalCenter: parent.verticalCenter
               color: Util.alpha(root.dim, 0.35)
             }
@@ -1530,7 +1858,7 @@ Item {
                   ? (modelData.awaitingPermission === true ? "permission" : "busy")
                   : (String(modelData.lastOutcome || "") === "error" ? "error" : (String(modelData.lastOutcome || "") === "success" ? "success" : "idle"))
                 height: chatRow.height
-                width: chipInner.implicitWidth + Style.space(18)
+                width: chipInner.implicitWidth + root.px(18)
                 radius: height / 2
                 color: current ? Util.alpha(Color.accent, 0.20) : (chipHit.containsMouse ? Util.alpha(Color.foreground, 0.10) : root.sheet)
                 border.width: 1
@@ -1552,11 +1880,11 @@ Item {
                 Row {
                   id: chipInner
                   anchors.centerIn: parent
-                  spacing: Style.space(6)
+                  spacing: root.px(6)
 
                   Rectangle {
                     visible: chatChip.chipState !== "idle"
-                    width: Style.space(7)
+                    width: root.px(7)
                     height: width
                     radius: width / 2
                     anchors.verticalCenter: parent.verticalCenter
@@ -1568,19 +1896,19 @@ Item {
                       running: chatChip.chipState === "busy"
                       loops: Animation.Infinite
                       alwaysRunToEnd: true
-                      NumberAnimation { from: 1; to: 0.25; duration: 600; easing.type: Easing.InOutSine }
-                      NumberAnimation { from: 0.25; to: 1; duration: 600; easing.type: Easing.InOutSine }
+                      NumberAnimation { from: 1; to: 0.75; duration: 1400; easing.type: Easing.InOutSine }
+                      NumberAnimation { from: 0.75; to: 1; duration: 1400; easing.type: Easing.InOutSine }
                     }
                   }
 
                   Text {
                     textFormat: Text.PlainText
                     text: String(chatChip.modelData.title || "Chat")
-                    width: Math.min(implicitWidth, Style.space(150))
+                    width: Math.min(implicitWidth, root.px(150))
                     elide: Text.ElideRight
                     color: chatChip.current ? root.foreground : root.dim
                     font.family: root.fontFamily
-                    font.pixelSize: Style.font.caption
+                    font.pixelSize: root.fontPx(Style.font.caption)
                     anchors.verticalCenter: parent.verticalCenter
                   }
 
@@ -1590,7 +1918,7 @@ Item {
                     opacity: chatChip.current || chipHit.containsMouse || chatClose.containsMouse ? 1 : 0.35
                     color: chatClose.containsMouse ? Color.urgent : root.dim
                     font.family: menuCodicon.name !== "" ? menuCodicon.name : "codicon"
-                    font.pixelSize: Style.space(12)
+                    font.pixelSize: root.px(12)
                     anchors.verticalCenter: parent.verticalCenter
 
                     MouseArea {
@@ -1614,22 +1942,83 @@ Item {
         }
       }
 
+      Row {
+        visible: root.listening
+        height: root.listening ? root.px(36) : 0
+        spacing: root.px(8)
+        x: (parent.width - width) / 2
+
+        VoiceMeter {
+          width: root.px(188)
+          height: parent.height
+          uiScale: root.uiScale
+          level: alfred ? alfred.audioLevel : 0
+          capturing: alfred ? alfred.voiceCapturing : false
+          hearing: alfred ? alfred.voiceHearing : false
+          elapsedMs: alfred ? alfred.voiceElapsedMs : 0
+        }
+
+        Rectangle {
+          width: root.px(64)
+          height: parent.height
+          radius: height / 2
+          color: voiceOkHit.containsMouse ? Theme.moodRed() : Util.alpha(Theme.moodRed(), 0.88)
+
+          Text {
+            anchors.centerIn: parent
+            textFormat: Text.PlainText
+            text: "OK"
+            color: "#1a120c"
+            font.family: root.fontFamily
+            font.pixelSize: root.fontPx(Style.font.caption)
+            font.bold: true
+          }
+
+          MouseArea {
+            id: voiceOkHit
+            anchors.fill: parent
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            onClicked: root.stopListen()
+          }
+        }
+      }
+
       Item {
         id: menuWrap
+        readonly property real targetHeight: root.focused && root.menuOpen && !root.pickerOpen && !root.slashPanelOpen ? Math.min(menuCol.implicitHeight + root.px(20), root.px(root.menuKind === "shortcuts" ? 420 : root.menuKind === "face" ? 560 : 320)) : 0
+        property real shownHeight: 0
+        property real shownOpacity: 0
+        property real shownScale: 0.98
+        property bool motionReady: false
+        property bool closing: false
         width: parent.width
-        height: root.focused && root.menuOpen && !root.pickerOpen && !root.slashPanelOpen ? Math.min(menuCol.implicitHeight + Style.space(20), Style.space(root.menuKind === "shortcuts" ? 420 : 320)) : 0
+        height: motionReady ? shownHeight : targetHeight
         clip: true
-        opacity: height > 0 ? 1 : 0
+        opacity: motionReady ? shownOpacity : (targetHeight > 0.5 ? 1 : 0)
+        scale: motionReady ? shownScale : (targetHeight > 0.5 ? 1 : 0.98)
+        transformOrigin: Item.Top
         z: 20
+        onTargetHeightChanged: root.trackSheet(menuWrap)
+        Component.onCompleted: root.armSheet(menuWrap)
 
         Behavior on height {
-          NumberAnimation { duration: 140; easing.type: Easing.OutCubic }
+          enabled: menuWrap.motionReady
+          SheetEase { closing: menuWrap.closing }
+        }
+        Behavior on opacity {
+          enabled: menuWrap.motionReady
+          SheetEase { closing: menuWrap.closing }
+        }
+        Behavior on scale {
+          enabled: menuWrap.motionReady
+          SheetEase { closing: menuWrap.closing }
         }
 
         Rectangle {
           anchors.fill: parent
-          anchors.topMargin: Style.space(6)
-          radius: Style.space(Theme.arcRadiusPx())
+          anchors.topMargin: root.px(6)
+          radius: root.px(Theme.arcRadiusPx())
           color: root.sheet
           border.width: 1
           border.color: Util.alpha(Color.accent, 0.18)
@@ -1637,7 +2026,7 @@ Item {
           Flickable {
             id: menuFlick
             anchors.fill: parent
-            anchors.margins: Style.space(8)
+            anchors.margins: root.px(8)
             contentWidth: width
             contentHeight: menuCol.implicitHeight
             clip: true
@@ -1648,23 +2037,23 @@ Item {
           Column {
             id: menuCol
             width: menuFlick.width
-            spacing: Style.space(2)
+            spacing: root.px(2)
 
             Item {
               width: parent.width
-              height: Style.space(22)
+              height: root.px(22)
 
               Row {
                 anchors.verticalCenter: parent.verticalCenter
-                spacing: Style.space(4)
+                spacing: root.px(4)
 
                 Text {
-                  visible: root.menuParent !== ""
+                  visible: root.menuParent !== "" || root.menuKind === "face"
                   textFormat: Text.PlainText
                   text: Theme.glyph("chevron-left")
                   color: menuBackHit.containsMouse ? root.foreground : root.dim
                   font.family: menuCodicon.name !== "" ? menuCodicon.name : "codicon"
-                  font.pixelSize: Style.space(Theme.iconPx())
+                  font.pixelSize: root.px(Theme.iconPx())
                   anchors.verticalCenter: parent.verticalCenter
                 }
 
@@ -1673,16 +2062,40 @@ Item {
                   text: root.menuTitle()
                   color: menuBackHit.containsMouse ? root.foreground : root.dim
                   font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
+                  font.pixelSize: root.fontPx(Style.font.caption)
                   font.bold: true
                   anchors.verticalCenter: parent.verticalCenter
+                  width: root.menuKind === "face" ? Math.min(implicitWidth, menuCol.width - root.px(56)) : implicitWidth
+                  elide: Text.ElideRight
                 }
+              }
+
+              ProfileBlob {
+                id: faceDraftBlob
+                visible: root.menuKind === "face" && root.faceKey !== ""
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                width: root.px(22)
+                height: root.px(22)
+                agentId: root.faceKey
+                slot: "face-draft"
+                shape: root.faceShape
+                fill: root.faceFill
+                expression: root.faceExpression
+                idleVariant: root.faceIdle
+                phase: root.facePhase
+                eyes: root.eyesFor(root.faceExpression)
+                mood: "idle"
+                still: true
               }
 
               MouseArea {
                 id: menuBackHit
-                anchors.fill: parent
-                enabled: root.menuParent !== ""
+                anchors.left: parent.left
+                anchors.top: parent.top
+                anchors.bottom: parent.bottom
+                anchors.right: root.menuKind === "face" ? faceDraftBlob.left : parent.right
+                enabled: root.menuParent !== "" || root.menuKind === "face"
                 hoverEnabled: true
                 cursorShape: Qt.PointingHandCursor
                 preventStealing: true
@@ -1698,22 +2111,22 @@ Item {
                 id: settingsRow
                 required property var modelData
                 width: menuCol.width
-                height: Style.space(30)
-                radius: Style.space(6)
+                height: root.px(30)
+                radius: root.px(6)
                 color: settingsHit.containsMouse ? Util.alpha(Color.foreground, 0.10) : "transparent"
 
                 Row {
                   anchors.left: parent.left
-                  anchors.leftMargin: Style.space(8)
+                  anchors.leftMargin: root.px(8)
                   anchors.verticalCenter: parent.verticalCenter
-                  spacing: Style.space(8)
+                  spacing: root.px(8)
 
                   Text {
                     textFormat: Text.PlainText
                     text: Theme.glyph(String(settingsRow.modelData.icon || ""))
                     color: root.dim
                     font.family: menuCodicon.name !== "" ? menuCodicon.name : "codicon"
-                    font.pixelSize: Style.space(Theme.iconPx())
+                    font.pixelSize: root.px(Theme.iconPx())
                     anchors.verticalCenter: parent.verticalCenter
                   }
 
@@ -1722,25 +2135,25 @@ Item {
                     text: String(settingsRow.modelData.label || "")
                     color: root.foreground
                     font.family: root.fontFamily
-                    font.pixelSize: Style.font.caption
+                    font.pixelSize: root.fontPx(Style.font.caption)
                     anchors.verticalCenter: parent.verticalCenter
                   }
                 }
 
                 Row {
                   anchors.right: parent.right
-                  anchors.rightMargin: Style.space(8)
+                  anchors.rightMargin: root.px(8)
                   anchors.verticalCenter: parent.verticalCenter
-                  spacing: Style.space(6)
+                  spacing: root.px(6)
 
                   Text {
                     textFormat: Text.PlainText
                     text: String(settingsRow.modelData.value || "")
-                    width: Math.min(implicitWidth, Style.space(260))
+                    width: Math.min(implicitWidth, root.px(260))
                     elide: Text.ElideRight
                     color: root.dim
                     font.family: root.fontFamily
-                    font.pixelSize: Style.font.caption
+                    font.pixelSize: root.fontPx(Style.font.caption)
                     anchors.verticalCenter: parent.verticalCenter
                   }
 
@@ -1750,7 +2163,7 @@ Item {
                     text: Theme.glyph("chevron-right")
                     color: root.dim
                     font.family: menuCodicon.name !== "" ? menuCodicon.name : "codicon"
-                    font.pixelSize: Style.space(Theme.iconPx())
+                    font.pixelSize: root.px(Theme.iconPx())
                     anchors.verticalCenter: parent.verticalCenter
                   }
                 }
@@ -1773,15 +2186,15 @@ Item {
             Text {
               visible: root.menuKind === "shortcuts" && (!root.shortcutsHooked || root.shortcutsError !== "")
               width: parent.width
-              leftPadding: Style.space(8)
-              rightPadding: Style.space(8)
+              leftPadding: root.px(8)
+              rightPadding: root.px(8)
               wrapMode: Text.WordWrap
               textFormat: Text.PlainText
               text: root.shortcutsError !== "" ? root.shortcutsError
                 : "Global keys are not active: add pcall(require, \"hypr.alfred\") to ~/.config/hypr/bindings.lua"
               color: root.shortcutsError !== "" ? Color.urgent : Theme.moodYellow()
               font.family: root.fontFamily
-              font.pixelSize: Style.font.caption
+              font.pixelSize: root.fontPx(Style.font.caption)
             }
 
             Repeater {
@@ -1795,44 +2208,44 @@ Item {
                 readonly property string keys: String(modelData.keys || "")
                 readonly property bool custom: !header && keys !== String(modelData.defaultKeys || "")
                 width: menuCol.width
-                height: header ? Style.space(24) : Style.space(30)
-                radius: Style.space(6)
+                height: header ? root.px(24) : root.px(30)
+                radius: root.px(6)
                 color: capturing ? Util.alpha(Color.accent, 0.16)
                   : (!header && shortcutHit.containsMouse ? Util.alpha(Color.foreground, 0.10) : "transparent")
 
                 Text {
                   visible: shortcutRow.header
                   anchors.left: parent.left
-                  anchors.leftMargin: Style.space(8)
+                  anchors.leftMargin: root.px(8)
                   anchors.bottom: parent.bottom
-                  anchors.bottomMargin: Style.space(4)
+                  anchors.bottomMargin: root.px(4)
                   textFormat: Text.PlainText
                   text: String(shortcutRow.modelData.label || "")
                   color: root.dim
                   opacity: 0.7
                   font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
+                  font.pixelSize: root.fontPx(Style.font.caption)
                   font.letterSpacing: 1
                 }
 
                 Text {
                   visible: !shortcutRow.header
                   anchors.left: parent.left
-                  anchors.leftMargin: Style.space(8)
+                  anchors.leftMargin: root.px(8)
                   anchors.verticalCenter: parent.verticalCenter
                   textFormat: Text.PlainText
                   text: String(shortcutRow.modelData.label || "")
                   color: root.foreground
                   font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
+                  font.pixelSize: root.fontPx(Style.font.caption)
                 }
 
                 Row {
                   visible: !shortcutRow.header
                   anchors.right: parent.right
-                  anchors.rightMargin: Style.space(8)
+                  anchors.rightMargin: root.px(8)
                   anchors.verticalCenter: parent.verticalCenter
-                  spacing: Style.space(8)
+                  spacing: root.px(8)
 
                   Text {
                     visible: shortcutRow.custom && !shortcutRow.capturing
@@ -1840,7 +2253,7 @@ Item {
                     text: Theme.glyph("clear-all")
                     color: resetHit.containsMouse ? root.foreground : root.dim
                     font.family: menuCodicon.name !== "" ? menuCodicon.name : "codicon"
-                    font.pixelSize: Style.space(12)
+                    font.pixelSize: root.px(12)
                     anchors.verticalCenter: parent.verticalCenter
 
                     MouseArea {
@@ -1859,9 +2272,9 @@ Item {
                   }
 
                   Rectangle {
-                    height: Style.space(20)
-                    width: keyText.implicitWidth + Style.space(14)
-                    radius: Style.space(5)
+                    height: root.px(20)
+                    width: keyText.implicitWidth + root.px(14)
+                    radius: root.px(5)
                     color: shortcutRow.capturing ? "transparent" : Util.alpha(Color.foreground, 0.08)
                     border.width: 1
                     border.color: shortcutRow.capturing ? Color.accent : Util.alpha(Color.foreground, 0.14)
@@ -1876,7 +2289,7 @@ Item {
                       color: shortcutRow.capturing ? Color.accent
                         : (shortcutRow.keys !== "" ? root.foreground : root.dim)
                       font.family: root.fontFamily
-                      font.pixelSize: Style.font.caption
+                      font.pixelSize: root.fontPx(Style.font.caption)
                     }
                   }
                 }
@@ -1905,27 +2318,27 @@ Item {
             Text {
               visible: root.menuKind === "shortcuts"
               width: parent.width
-              topPadding: Style.space(6)
-              leftPadding: Style.space(8)
-              rightPadding: Style.space(8)
+              topPadding: root.px(6)
+              leftPadding: root.px(8)
+              rightPadding: root.px(8)
               wrapMode: Text.WordWrap
               textFormat: Text.PlainText
               text: root.captureId !== "" ? "Press the new combination · Esc cancels · Backspace turns it off"
                 : (root.shortcutsSaving ? "Saving…" : "Click a shortcut to change it · the reset icon restores the default")
               color: root.dim
               font.family: root.fontFamily
-              font.pixelSize: Style.font.caption
+              font.pixelSize: root.fontPx(Style.font.caption)
             }
 
             Text {
               visible: root.menuKind === "sessions" && root.sessionOptions.length === 0
               width: parent.width
-              leftPadding: Style.space(8)
+              leftPadding: root.px(8)
               textFormat: Text.PlainText
               text: root.sessionsLoading ? "Loading sessions…" : (root.sessionsError !== "" ? root.sessionsError : "No previous sessions")
               color: root.sessionsError !== "" ? Color.urgent : root.dim
               font.family: root.fontFamily
-              font.pixelSize: Style.font.caption
+              font.pixelSize: root.fontPx(Style.font.caption)
             }
 
             Repeater {
@@ -1936,17 +2349,17 @@ Item {
                 required property var modelData
                 readonly property bool isOpen: root.chatIsOpen(modelData.id)
                 width: menuCol.width
-                height: Style.space(40)
-                radius: Style.space(6)
+                height: root.px(40)
+                radius: root.px(6)
                 color: isOpen ? Util.alpha(Color.accent, 0.14) : (sessionHit.containsMouse ? Util.alpha(Color.foreground, 0.08) : "transparent")
 
                 Column {
                   anchors.left: parent.left
                   anchors.right: parent.right
                   anchors.verticalCenter: parent.verticalCenter
-                  anchors.leftMargin: Style.space(8)
-                  anchors.rightMargin: Style.space(8)
-                  spacing: Style.space(1)
+                  anchors.leftMargin: root.px(8)
+                  anchors.rightMargin: root.px(8)
+                  spacing: root.px(1)
 
                   Text {
                     width: parent.width
@@ -1955,7 +2368,7 @@ Item {
                     elide: Text.ElideRight
                     color: sessionRow.isOpen ? Color.accent : root.foreground
                     font.family: root.fontFamily
-                    font.pixelSize: Style.font.caption
+                    font.pixelSize: root.fontPx(Style.font.caption)
                   }
 
                   Text {
@@ -1966,7 +2379,7 @@ Item {
                     elide: Text.ElideRight
                     color: root.dim
                     font.family: root.fontFamily
-                    font.pixelSize: Style.font.caption
+                    font.pixelSize: root.fontPx(Style.font.caption)
                   }
                 }
 
@@ -1993,22 +2406,22 @@ Item {
                 required property int index
                 readonly property var row: root.attachItems[index]
                 width: menuCol.width
-                height: Style.space(30)
-                radius: Style.space(6)
+                height: root.px(30)
+                radius: root.px(6)
                 color: attachHit.containsMouse ? Util.alpha(Color.foreground, 0.10) : "transparent"
 
                 Row {
                   anchors.fill: parent
-                  anchors.leftMargin: Style.space(8)
-                  anchors.rightMargin: Style.space(8)
-                  spacing: Style.space(8)
+                  anchors.leftMargin: root.px(8)
+                  anchors.rightMargin: root.px(8)
+                  spacing: root.px(8)
 
                   Text {
                     textFormat: Text.PlainText
                     text: Theme.glyph(row.iconName)
                     color: root.dim
                     font.family: menuCodicon.name !== "" ? menuCodicon.name : "codicon"
-                    font.pixelSize: Style.space(Theme.iconPx())
+                    font.pixelSize: root.px(Theme.iconPx())
                     anchors.verticalCenter: parent.verticalCenter
                   }
 
@@ -2017,7 +2430,7 @@ Item {
                     text: String(row.rowLabel)
                     color: root.foreground
                     font.family: root.fontFamily
-                    font.pixelSize: Style.font.caption
+                    font.pixelSize: root.fontPx(Style.font.caption)
                     anchors.verticalCenter: parent.verticalCenter
                   }
                 }
@@ -2044,8 +2457,8 @@ Item {
               Rectangle {
                 required property var modelData
                 width: menuCol.width
-                height: Style.space(28)
-                radius: Style.space(6)
+                height: root.px(28)
+                radius: root.px(6)
                 color: String(modelData) === root.modelName
                   ? Util.alpha(Color.accent, 0.18)
                   : (modelHit.containsMouse ? Util.alpha(Color.foreground, 0.08) : "transparent")
@@ -2053,15 +2466,15 @@ Item {
                 Text {
                   anchors.verticalCenter: parent.verticalCenter
                   anchors.left: parent.left
-                  anchors.leftMargin: Style.space(8)
+                  anchors.leftMargin: root.px(8)
                   anchors.right: parent.right
-                  anchors.rightMargin: Style.space(8)
+                  anchors.rightMargin: root.px(8)
                   textFormat: Text.PlainText
                   text: String(modelData)
                   elide: Text.ElideRight
                   color: String(modelData) === root.modelName ? Color.accent : root.foreground
                   font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
+                  font.pixelSize: root.fontPx(Style.font.caption)
                 }
 
                 MouseArea {
@@ -2085,8 +2498,8 @@ Item {
               Rectangle {
                 required property var modelData
                 width: menuCol.width
-                height: Style.space(28)
-                radius: Style.space(6)
+                height: root.px(28)
+                radius: root.px(6)
                 color: String(modelData) === root.reasoningEffort
                   ? Util.alpha(Color.accent, 0.18)
                   : (effortHit.containsMouse ? Util.alpha(Color.foreground, 0.08) : "transparent")
@@ -2094,15 +2507,15 @@ Item {
                 Text {
                   anchors.verticalCenter: parent.verticalCenter
                   anchors.left: parent.left
-                  anchors.leftMargin: Style.space(8)
+                  anchors.leftMargin: root.px(8)
                   anchors.right: parent.right
-                  anchors.rightMargin: Style.space(8)
+                  anchors.rightMargin: root.px(8)
                   textFormat: Text.PlainText
                   text: AlfredModel.effortLabel(modelData)
                   elide: Text.ElideRight
                   color: String(modelData) === root.reasoningEffort ? Color.accent : root.foreground
                   font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
+                  font.pixelSize: root.fontPx(Style.font.caption)
                 }
 
                 MouseArea {
@@ -2126,31 +2539,31 @@ Item {
               Rectangle {
                 required property var modelData
                 width: menuCol.width
-                height: Style.space(30)
-                radius: Style.space(6)
+                height: root.px(30)
+                radius: root.px(6)
                 color: String(modelData.id) === root.gatewayConnectionId
                   ? Util.alpha(Color.accent, 0.18)
                   : (gatewayHit.containsMouse ? Util.alpha(Color.foreground, 0.08) : "transparent")
 
                 Row {
                   anchors.fill: parent
-                  anchors.leftMargin: Style.space(8)
-                  anchors.rightMargin: Style.space(8)
-                  spacing: Style.space(8)
+                  anchors.leftMargin: root.px(8)
+                  anchors.rightMargin: root.px(8)
+                  spacing: root.px(8)
 
                   Text {
                     textFormat: Text.PlainText
                     text: Theme.glyph(String(modelData.kind) === "local" ? "server" : "plug")
                     color: root.dim
                     font.family: menuCodicon.name !== "" ? menuCodicon.name : "codicon"
-                    font.pixelSize: Style.space(Theme.iconPx())
+                    font.pixelSize: root.px(Theme.iconPx())
                     anchors.verticalCenter: parent.verticalCenter
                   }
 
                   Column {
                     anchors.verticalCenter: parent.verticalCenter
                     spacing: 0
-                    width: parent.width - Style.space(28)
+                    width: parent.width - root.px(28)
 
                     Text {
                       width: parent.width
@@ -2159,7 +2572,7 @@ Item {
                       elide: Text.ElideRight
                       color: String(modelData.id) === root.gatewayConnectionId ? Color.accent : root.foreground
                       font.family: root.fontFamily
-                      font.pixelSize: Style.font.caption
+                      font.pixelSize: root.fontPx(Style.font.caption)
                     }
 
                     Text {
@@ -2170,7 +2583,7 @@ Item {
                       elide: Text.ElideMiddle
                       color: root.dim
                       font.family: root.fontFamily
-                      font.pixelSize: Style.font.caption
+                      font.pixelSize: root.fontPx(Style.font.caption)
                     }
                   }
                 }
@@ -2198,21 +2611,26 @@ Item {
                 required property var modelData
                 readonly property bool current: String(modelData.key || modelData.id || "") === root.profileKey
                 width: menuCol.width
-                height: Style.space(40)
-                radius: Style.space(6)
+                height: root.px(40)
+                radius: root.px(6)
                 color: profileRow.current
                   ? Util.alpha(Color.accent, 0.18)
                   : (profileHit.containsMouse ? Util.alpha(Color.foreground, 0.08) : "transparent")
 
                 Row {
-                  anchors.fill: parent
-                  anchors.leftMargin: Style.space(8)
-                  anchors.rightMargin: Style.space(8)
-                  spacing: Style.space(8)
+                  id: profileBody
+                  anchors.left: parent.left
+                  anchors.right: faceEdit.left
+                  anchors.top: parent.top
+                  anchors.bottom: parent.bottom
+                  anchors.leftMargin: root.px(8)
+                  anchors.rightMargin: root.px(4)
+                  spacing: root.px(8)
 
                   ProfileBlob {
-                    width: Style.space(22)
-                    height: Style.space(22)
+                    id: profileFace
+                    width: root.px(22)
+                    height: root.px(22)
                     anchors.verticalCenter: parent.verticalCenter
                     agentId: String(profileRow.modelData.key || profileRow.modelData.id || "")
                     slot: "menu"
@@ -2228,7 +2646,7 @@ Item {
                   Column {
                     anchors.verticalCenter: parent.verticalCenter
                     spacing: 0
-                    width: parent.width - Style.space(38)
+                    width: Math.max(0, profileBody.width - profileFace.width - root.px(8))
 
                     Text {
                       width: parent.width
@@ -2237,7 +2655,7 @@ Item {
                       elide: Text.ElideRight
                       color: profileRow.current ? Color.accent : root.foreground
                       font.family: root.fontFamily
-                      font.pixelSize: Style.font.caption
+                      font.pixelSize: root.fontPx(Style.font.caption)
                     }
 
                     Text {
@@ -2253,14 +2671,59 @@ Item {
                       elide: Text.ElideRight
                       color: root.dim
                       font.family: root.fontFamily
-                      font.pixelSize: Style.font.caption
+                      font.pixelSize: root.fontPx(Style.font.caption)
+                    }
+                  }
+                }
+
+                Item {
+                  id: faceEdit
+                  z: 2
+                  width: root.px(32)
+                  height: root.px(32)
+                  anchors.right: parent.right
+                  anchors.rightMargin: root.px(4)
+                  anchors.verticalCenter: parent.verticalCenter
+
+                  Text {
+                    anchors.centerIn: parent
+                    textFormat: Text.PlainText
+                    text: Theme.glyph("edit")
+                    color: faceEditHit.containsMouse ? root.foreground : root.dim
+                    font.family: menuCodicon.name !== "" ? menuCodicon.name : "codicon"
+                    font.pixelSize: root.px(Theme.iconPx())
+                  }
+
+                  MouseArea {
+                    id: faceEditHit
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    preventStealing: true
+                    onPressed: function(mouse) {
+                      mouse.accepted = true
+                      var data = profileRow.modelData
+                      var snap = {
+                        key: String(data.key || data.id || ""),
+                        label: String(data.label || ""),
+                        shape: String(data.shape || "cercle"),
+                        fill: String(data.fill || "#0a0a0c"),
+                        expression: String(data.expression || "neutre"),
+                        idle: Number(data.idle || 0),
+                        phase: Number(data.phase || 0)
+                      }
+                      Qt.callLater(function() { root.openFaceEditor(snap) })
                     }
                   }
                 }
 
                 MouseArea {
                   id: profileHit
-                  anchors.fill: parent
+                  z: 1
+                  anchors.left: parent.left
+                  anchors.top: parent.top
+                  anchors.bottom: parent.bottom
+                  anchors.right: faceEdit.left
                   hoverEnabled: true
                   cursorShape: Qt.PointingHandCursor
                   preventStealing: true
@@ -2272,6 +2735,176 @@ Item {
                 }
               }
             }
+
+            Column {
+              id: faceEditor
+              visible: root.menuKind === "face"
+              width: parent.width
+              spacing: 0
+
+              function pick(kind, value) {
+                Qt.callLater(function() { root.pickFace(kind, value) })
+              }
+
+              // Resolved here, where root is in scope. Delegates only read modelData.
+              readonly property var swatchModel: {
+                var shape = String(root.faceShape || "cercle")
+                var fill = String(root.faceFill || "#0a0a0c")
+                var expr = String(root.faceExpression || "neutre")
+                var key = String(root.faceKey || "")
+                var idle = root.faceIdle | 0
+                var phase = Number(root.facePhase) || 0
+                var size = root.px(76)
+                var blob = root.px(22)
+                var radius = root.px(6)
+                var gap = root.px(4)
+                var inset = root.px(8)
+                var labelSize = root.fontPx(Style.font.caption)
+                var labelColor = root.dim
+                var labelFont = root.fontFamily
+                var rowSpacing = root.px(4)
+                var below = root.px(10)
+                var groups = [
+                  { caption: "Shape", kind: "shape", options: root.faceShapes, labels: root.faceShapeLabels },
+                  { caption: "Color", kind: "fill", options: root.faceColors, labels: root.faceColorLabels },
+                  { caption: "Expression", kind: "expression", options: root.faceExpressions, labels: root.faceExpressionLabels },
+                  { caption: "Idle", kind: "idle", options: root.faceIdles, labels: root.faceIdleLabels }
+                ]
+                var rows = []
+                var g
+                for (g = 0; g < groups.length; g++) {
+                  var group = groups[g]
+                  var options = group.options || []
+                  var swatches = []
+                  var i
+                  for (i = 0; i < options.length; i++) {
+                    var value = String(options[i] || "")
+                    var names = group.labels || options
+                    var itemShape = group.kind === "shape" ? value : shape
+                    var itemFill = group.kind === "fill" ? value : fill
+                    var itemExpr = group.kind === "expression" ? value : expr
+                    var itemIdle = group.kind === "idle" ? (Number(value) || 0) : idle
+                    var chosen = false
+                    if (group.kind === "shape") chosen = shape === value
+                    else if (group.kind === "fill") chosen = fill.toLowerCase() === value.toLowerCase()
+                    else if (group.kind === "idle") chosen = idle === itemIdle
+                    else chosen = expr === value
+                    swatches.push({
+                      kind: group.kind,
+                      value: value,
+                      label: String(names[i] || value),
+                      labelSize: labelSize,
+                      labelFont: labelFont,
+                      labelColor: labelColor,
+                      still: group.kind !== "idle",
+                      shape: itemShape,
+                      fill: itemFill,
+                      expression: itemExpr,
+                      eyes: root.eyesFor(itemExpr),
+                      agentId: key + ":" + group.kind + ":" + value,
+                      chosen: chosen,
+                      idle: itemIdle,
+                      phase: phase,
+                      size: size,
+                      blob: blob,
+                      radius: radius
+                    })
+                  }
+                  rows.push({
+                    caption: group.caption,
+                    swatches: swatches,
+                    gap: gap,
+                    inset: inset,
+                    labelColor: labelColor,
+                    labelFont: labelFont,
+                    labelSize: labelSize,
+                    rowSpacing: rowSpacing,
+                    below: below
+                  })
+                }
+                return rows
+              }
+
+              Repeater {
+                model: faceEditor.swatchModel
+                delegate: FaceRow {
+                  required property var modelData
+                  caption: modelData.caption
+                  swatches: modelData.swatches
+                  gap: modelData.gap
+                  inset: modelData.inset
+                  labelColor: modelData.labelColor
+                  labelFont: modelData.labelFont
+                  labelSize: modelData.labelSize
+                  rowSpacing: modelData.rowSpacing
+                  below: modelData.below
+                }
+                onItemAdded: function(index, item) {
+                  if (item.wired) return
+                  item.wired = true
+                  item.picked.connect(function(kind, value) { faceEditor.pick(kind, value) })
+                }
+              }
+
+              Row {
+                x: root.px(8)
+                spacing: root.px(6)
+
+                Rectangle {
+                  width: Math.max(root.px(72), faceSaveLabel.implicitWidth + root.px(24))
+                  height: root.px(28)
+                  radius: root.px(6)
+                  color: faceSaveHit.containsMouse ? Util.alpha(Color.accent, 0.28) : Util.alpha(Color.accent, 0.18)
+
+                  Text {
+                    id: faceSaveLabel
+                    anchors.centerIn: parent
+                    textFormat: Text.PlainText
+                    text: "Save"
+                    color: root.foreground
+                    font.family: root.fontFamily
+                    font.pixelSize: root.fontPx(Style.font.caption)
+                  }
+
+                  MouseArea {
+                    id: faceSaveHit
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    preventStealing: true
+                    onPressed: function(mouse) { mouse.accepted = true }
+                    onClicked: Qt.callLater(root.saveFace)
+                  }
+                }
+
+                Rectangle {
+                  width: Math.max(root.px(72), faceResetLabel.implicitWidth + root.px(24))
+                  height: root.px(28)
+                  radius: root.px(6)
+                  color: faceResetHit.containsMouse ? Util.alpha(Color.foreground, 0.10) : "transparent"
+
+                  Text {
+                    id: faceResetLabel
+                    anchors.centerIn: parent
+                    textFormat: Text.PlainText
+                    text: "Reset"
+                    color: faceResetHit.containsMouse ? root.foreground : root.dim
+                    font.family: root.fontFamily
+                    font.pixelSize: root.fontPx(Style.font.caption)
+                  }
+
+                  MouseArea {
+                    id: faceResetHit
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    preventStealing: true
+                    onPressed: function(mouse) { mouse.accepted = true }
+                    onClicked: Qt.callLater(root.clearFace)
+                  }
+                }
+              }
+            }
           }
           }
         }
@@ -2279,20 +2912,39 @@ Item {
 
       Item {
         id: slashWrap
+        readonly property real targetHeight: root.slashPanelOpen ? root.px(280) : 0
+        property real shownHeight: 0
+        property real shownOpacity: 0
+        property real shownScale: 0.98
+        property bool motionReady: false
+        property bool closing: false
         width: parent.width
-        height: root.slashPanelOpen ? Style.space(280) : 0
+        height: motionReady ? shownHeight : targetHeight
         clip: true
-        opacity: height > 0 ? 1 : 0
+        opacity: motionReady ? shownOpacity : (targetHeight > 0.5 ? 1 : 0)
+        scale: motionReady ? shownScale : (targetHeight > 0.5 ? 1 : 0.98)
+        transformOrigin: Item.Top
         z: 20
+        onTargetHeightChanged: root.trackSheet(slashWrap)
+        Component.onCompleted: root.armSheet(slashWrap)
 
         Behavior on height {
-          NumberAnimation { duration: 140; easing.type: Easing.OutCubic }
+          enabled: slashWrap.motionReady
+          SheetEase { closing: slashWrap.closing }
+        }
+        Behavior on opacity {
+          enabled: slashWrap.motionReady
+          SheetEase { closing: slashWrap.closing }
+        }
+        Behavior on scale {
+          enabled: slashWrap.motionReady
+          SheetEase { closing: slashWrap.closing }
         }
 
         Rectangle {
           anchors.fill: parent
-          anchors.topMargin: Style.space(6)
-          radius: Style.space(Theme.arcRadiusPx())
+          anchors.topMargin: root.px(6)
+          radius: root.px(Theme.arcRadiusPx())
           color: root.sheet
           border.width: 1
           border.color: Util.alpha(Color.accent, 0.18)
@@ -2300,7 +2952,7 @@ Item {
           Flickable {
             id: slashList
             anchors.fill: parent
-            anchors.margins: Style.space(8)
+            anchors.margins: root.px(8)
             clip: true
             boundsBehavior: Flickable.StopAtBounds
             contentWidth: width
@@ -2315,12 +2967,12 @@ Item {
               Text {
                 width: parent.width
                 visible: root.slashItems.length === 0
-                height: visible ? Style.space(22) : 0
+                height: visible ? root.px(22) : 0
                 textFormat: Text.PlainText
                 text: root.slashLoading ? "Loading commands and skills…" : "No matching commands"
                 color: root.dim
                 font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
+                font.pixelSize: root.fontPx(Style.font.caption)
               }
 
               Repeater {
@@ -2329,26 +2981,26 @@ Item {
                 Item {
                   required property var modelData
                   width: slashCol.width
-                  height: modelData.rowType === "header" ? Style.space(22) : Style.space(40)
+                  height: modelData.rowType === "header" ? root.px(22) : root.px(40)
 
                   Text {
                     visible: modelData.rowType === "header"
                     anchors.left: parent.left
                     anchors.right: parent.right
                     anchors.verticalCenter: parent.verticalCenter
-                    anchors.leftMargin: Style.space(8)
+                    anchors.leftMargin: root.px(8)
                     textFormat: Text.PlainText
                     text: String(modelData.group || "").toUpperCase()
                     color: root.dim
                     font.family: root.fontFamily
-                    font.pixelSize: Style.font.caption
+                    font.pixelSize: root.fontPx(Style.font.caption)
                     font.bold: true
                   }
 
                   Rectangle {
                     visible: modelData.rowType === "item"
                     anchors.fill: parent
-                    radius: Style.space(6)
+                    radius: root.px(6)
                     color: modelData.itemIndex === root.slashIndex
                       ? Util.alpha(Color.accent, 0.18)
                       : (slashHit.containsMouse ? Util.alpha(Color.foreground, 0.08) : "transparent")
@@ -2357,9 +3009,9 @@ Item {
                       anchors.left: parent.left
                       anchors.right: parent.right
                       anchors.verticalCenter: parent.verticalCenter
-                      anchors.leftMargin: Style.space(8)
-                      anchors.rightMargin: Style.space(8)
-                      spacing: Style.space(1)
+                      anchors.leftMargin: root.px(8)
+                      anchors.rightMargin: root.px(8)
+                      spacing: root.px(1)
 
                       Text {
                         width: parent.width
@@ -2368,7 +3020,7 @@ Item {
                         elide: Text.ElideRight
                         color: String(modelData.kind) === "skill" ? Color.accent : root.foreground
                         font.family: root.fontFamily
-                        font.pixelSize: Style.font.caption
+                        font.pixelSize: root.fontPx(Style.font.caption)
                       }
 
                       Text {
@@ -2379,7 +3031,7 @@ Item {
                         elide: Text.ElideRight
                         color: root.dim
                         font.family: root.fontFamily
-                        font.pixelSize: Style.font.caption
+                        font.pixelSize: root.fontPx(Style.font.caption)
                       }
                     }
 
@@ -2408,19 +3060,40 @@ Item {
 
       Item {
         id: pickerWrap
+        readonly property real targetHeight: root.focused && root.pickerOpen ? root.px(280) : 0
+        property real shownHeight: 0
+        property real shownOpacity: 0
+        property real shownScale: 0.98
+        property bool motionReady: false
+        property bool closing: false
         width: parent.width
-        height: root.focused && root.pickerOpen ? Style.space(280) : 0
+        height: motionReady ? shownHeight : targetHeight
         clip: true
-        opacity: height > 0 ? 1 : 0
+        opacity: motionReady ? shownOpacity : (targetHeight > 0.5 ? 1 : 0)
+        scale: motionReady ? shownScale : (targetHeight > 0.5 ? 1 : 0.98)
+        transformOrigin: Item.Top
         z: 20
+        onTargetHeightChanged: root.trackSheet(pickerWrap)
+        Component.onCompleted: root.armSheet(pickerWrap)
 
         Behavior on height {
-          NumberAnimation { duration: 140; easing.type: Easing.OutCubic }
+          enabled: pickerWrap.motionReady
+          SheetEase { closing: pickerWrap.closing }
+        }
+        Behavior on opacity {
+          enabled: pickerWrap.motionReady
+          SheetEase { closing: pickerWrap.closing }
+        }
+        Behavior on scale {
+          enabled: pickerWrap.motionReady
+          SheetEase { closing: pickerWrap.closing }
         }
 
         FilePicker {
+          uiScale: root.uiScale
+
           anchors.fill: parent
-          anchors.topMargin: Style.space(6)
+          anchors.topMargin: root.px(6)
           visible: root.pickerOpen
           mode: root.pickerMode !== "" ? root.pickerMode : "files"
           onAccepted: function(paths) {
@@ -2439,19 +3112,38 @@ Item {
 
       Item {
         id: previewWrap
+        readonly property real targetHeight: root.previewVisible ? Math.min(previewCol.implicitHeight + root.px(28), root.px(340)) : 0
+        property real shownHeight: 0
+        property real shownOpacity: 0
+        property real shownScale: 0.98
+        property bool motionReady: false
+        property bool closing: false
         width: parent.width
-        height: root.previewVisible ? Math.min(previewCol.implicitHeight + Style.space(28), Style.space(340)) : 0
+        height: motionReady ? shownHeight : targetHeight
         clip: true
-        opacity: height > 0 ? 1 : 0
+        opacity: motionReady ? shownOpacity : (targetHeight > 0.5 ? 1 : 0)
+        scale: motionReady ? shownScale : (targetHeight > 0.5 ? 1 : 0.98)
+        transformOrigin: Item.Top
+        onTargetHeightChanged: root.trackSheet(previewWrap)
+        Component.onCompleted: root.armSheet(previewWrap)
 
         Behavior on height {
-          NumberAnimation { duration: 180; easing.type: Easing.OutCubic }
+          enabled: previewWrap.motionReady
+          SheetEase { closing: previewWrap.closing }
+        }
+        Behavior on opacity {
+          enabled: previewWrap.motionReady
+          SheetEase { closing: previewWrap.closing }
+        }
+        Behavior on scale {
+          enabled: previewWrap.motionReady
+          SheetEase { closing: previewWrap.closing }
         }
 
         Rectangle {
           anchors.fill: parent
-          anchors.topMargin: Style.space(8)
-          radius: Style.space(18)
+          anchors.topMargin: root.px(8)
+          radius: root.px(18)
           color: root.sheet
           border.width: 1
           border.color: Util.alpha(Color.accent, 0.28)
@@ -2459,7 +3151,7 @@ Item {
           Flickable {
             id: previewFlick
             anchors.fill: parent
-            anchors.margins: Style.space(12)
+            anchors.margins: root.px(12)
             contentWidth: width
             contentHeight: previewCol.implicitHeight
             clip: true
@@ -2470,31 +3162,31 @@ Item {
             Column {
               id: previewCol
               width: previewFlick.width
-              spacing: Style.space(4)
+              spacing: root.px(4)
 
               Item {
                 width: parent.width
-                height: Style.space(22)
+                height: root.px(22)
 
                 Row {
                   anchors.left: parent.left
                   anchors.verticalCenter: parent.verticalCenter
-                  spacing: Style.space(6)
+                  spacing: root.px(6)
 
                   Text {
                     textFormat: Text.PlainText
                     text: Theme.glyph(root.awaitingPermission ? "lock" : "pulse")
                     color: root.awaitingPermission ? Theme.moodYellow() : Color.accent
                     font.family: menuCodicon.name !== "" ? menuCodicon.name : "codicon"
-                    font.pixelSize: Style.space(Theme.iconPx())
+                    font.pixelSize: root.px(Theme.iconPx())
                     anchors.verticalCenter: parent.verticalCenter
 
                     SequentialAnimation on opacity {
                       running: root.previewVisible && !root.awaitingPermission
                       loops: Animation.Infinite
                       alwaysRunToEnd: true
-                      NumberAnimation { from: 1; to: 0.35; duration: 700; easing.type: Easing.InOutSine }
-                      NumberAnimation { from: 0.35; to: 1; duration: 700; easing.type: Easing.InOutSine }
+                      NumberAnimation { from: 1; to: 0.75; duration: 1400; easing.type: Easing.InOutSine }
+                      NumberAnimation { from: 0.75; to: 1; duration: 1400; easing.type: Easing.InOutSine }
                     }
                   }
 
@@ -2504,7 +3196,7 @@ Item {
                       + (root.busyStartedAt > 0 ? " · " + AlfredModel.formatDuration(root.nowMs - root.busyStartedAt) : "")
                     color: root.dim
                     font.family: root.fontFamily
-                    font.pixelSize: Style.font.caption
+                    font.pixelSize: root.fontPx(Style.font.caption)
                     font.bold: true
                     anchors.verticalCenter: parent.verticalCenter
                   }
@@ -2517,7 +3209,7 @@ Item {
                   text: root.activity.length === 1 ? "1 step" : (root.activity.length + " steps")
                   color: root.dim
                   font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
+                  font.pixelSize: root.fontPx(Style.font.caption)
                 }
               }
 
@@ -2528,7 +3220,7 @@ Item {
                 text: root.gatewayKind === "local" ? "Waiting for the first step…" : "Remote gateways only report the final reply."
                 color: root.dim
                 font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
+                font.pixelSize: root.fontPx(Style.font.caption)
               }
 
               Repeater {
@@ -2541,45 +3233,45 @@ Item {
                   readonly property string status: String(modelData.status || "")
                   readonly property color tint: status === "error" ? Theme.moodRed() : (status === "running" ? Color.accent : root.dim)
                   width: previewCol.width
-                  height: stepText.implicitHeight + Style.space(8)
+                  height: stepText.implicitHeight + root.px(8)
 
                   Rectangle {
                     visible: stepRow.index < root.activity.length - 1
-                    x: Style.space(7)
-                    y: Style.space(20)
+                    x: root.px(7)
+                    y: root.px(20)
                     width: 1
-                    height: parent.height - Style.space(16)
+                    height: parent.height - root.px(16)
                     color: Util.alpha(root.dim, 0.35)
                   }
 
                   Text {
                     id: stepIcon
                     x: 0
-                    y: Style.space(4)
-                    width: Style.space(15)
+                    y: root.px(4)
+                    width: root.px(15)
                     horizontalAlignment: Text.AlignHCenter
                     textFormat: Text.PlainText
                     text: Theme.glyph(stepRow.status === "error" ? "error" : String(stepRow.modelData.icon || "tools"))
                     color: stepRow.tint
                     font.family: menuCodicon.name !== "" ? menuCodicon.name : "codicon"
-                    font.pixelSize: Style.space(Theme.iconPx())
+                    font.pixelSize: root.px(Theme.iconPx())
 
                     SequentialAnimation on opacity {
                       running: stepRow.status === "running"
                       loops: Animation.Infinite
                       alwaysRunToEnd: true
-                      NumberAnimation { from: 1; to: 0.3; duration: 500; easing.type: Easing.InOutSine }
-                      NumberAnimation { from: 0.3; to: 1; duration: 500; easing.type: Easing.InOutSine }
+                      NumberAnimation { from: 1; to: 0.75; duration: 1400; easing.type: Easing.InOutSine }
+                      NumberAnimation { from: 0.75; to: 1; duration: 1400; easing.type: Easing.InOutSine }
                     }
                   }
 
                   Column {
                     id: stepText
                     anchors.left: stepIcon.right
-                    anchors.leftMargin: Style.space(8)
+                    anchors.leftMargin: root.px(8)
                     anchors.right: stepMeta.left
-                    anchors.rightMargin: Style.space(8)
-                    y: Style.space(3)
+                    anchors.rightMargin: root.px(8)
+                    y: root.px(3)
                     spacing: 0
 
                     Text {
@@ -2589,7 +3281,7 @@ Item {
                       elide: Text.ElideRight
                       color: stepRow.status === "running" ? root.foreground : Util.alpha(root.foreground, 0.8)
                       font.family: root.fontFamily
-                      font.pixelSize: Style.font.caption
+                      font.pixelSize: root.fontPx(Style.font.caption)
                       font.bold: true
                     }
 
@@ -2601,7 +3293,7 @@ Item {
                       elide: Text.ElideMiddle
                       color: root.dim
                       font.family: root.fontFamily
-                      font.pixelSize: Style.font.caption
+                      font.pixelSize: root.fontPx(Style.font.caption)
                     }
 
                     Text {
@@ -2614,21 +3306,21 @@ Item {
                       elide: Text.ElideRight
                       color: Theme.moodRed()
                       font.family: root.fontFamily
-                      font.pixelSize: Style.font.caption
+                      font.pixelSize: root.fontPx(Style.font.caption)
                     }
                   }
 
                   Text {
                     id: stepMeta
                     anchors.right: parent.right
-                    y: Style.space(4)
+                    y: root.px(4)
                     textFormat: Text.PlainText
                     text: stepRow.status === "running"
                       ? AlfredModel.formatDuration(Math.max(0, root.nowMs - Number(stepRow.modelData.startedAt || root.nowMs)))
                       : AlfredModel.formatDuration(stepRow.modelData.durationMs)
                     color: stepRow.tint
                     font.family: root.fontFamily
-                    font.pixelSize: Style.font.caption
+                    font.pixelSize: root.fontPx(Style.font.caption)
                   }
                 }
               }
@@ -2636,15 +3328,15 @@ Item {
               Column {
                 visible: root.liveText !== ""
                 width: parent.width
-                spacing: Style.space(2)
-                topPadding: Style.space(4)
+                spacing: root.px(2)
+                topPadding: root.px(4)
 
                 Text {
                   textFormat: Text.PlainText
                   text: "WRITING"
                   color: root.dim
                   font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
+                  font.pixelSize: root.fontPx(Style.font.caption)
                   font.bold: true
                 }
 
@@ -2655,7 +3347,7 @@ Item {
                   wrapMode: Text.Wrap
                   color: root.foreground
                   font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
+                  font.pixelSize: root.fontPx(Style.font.caption)
                 }
               }
             }
@@ -2665,23 +3357,39 @@ Item {
 
       Item {
         id: bandWrap
+        readonly property real targetHeight: root.showThread ? Math.min(bandColumn.implicitHeight + root.px(24), root.bandMaxHeight) : 0
+        property real shownHeight: 0
+        property real shownOpacity: 0
+        property real shownScale: 0.98
+        property bool motionReady: false
+        property bool closing: false
         width: parent.width
-        height: root.showThread ? Math.min(bandColumn.implicitHeight + Style.space(24), root.bandMaxHeight) : 0
+        height: motionReady ? shownHeight : targetHeight
         clip: true
-        opacity: root.showThread ? 1 : 0
+        opacity: motionReady ? shownOpacity : (targetHeight > 0.5 ? 1 : 0)
+        scale: motionReady ? shownScale : (targetHeight > 0.5 ? 1 : 0.98)
+        transformOrigin: Item.Top
+        onTargetHeightChanged: root.trackSheet(bandWrap)
+        Component.onCompleted: root.armSheet(bandWrap)
 
         Behavior on height {
-          NumberAnimation { duration: 200; easing.type: Easing.OutCubic }
+          enabled: bandWrap.motionReady
+          SheetEase { closing: bandWrap.closing }
         }
         Behavior on opacity {
-          NumberAnimation { duration: 200; easing.type: Easing.OutCubic }
+          enabled: bandWrap.motionReady
+          SheetEase { closing: bandWrap.closing }
+        }
+        Behavior on scale {
+          enabled: bandWrap.motionReady
+          SheetEase { closing: bandWrap.closing }
         }
 
         Rectangle {
           id: band
           anchors.fill: parent
-          anchors.topMargin: Style.space(8)
-          radius: Style.space(18)
+          anchors.topMargin: root.px(8)
+          radius: root.px(18)
           color: root.sheet
           border.width: 1
           border.color: Util.alpha(Color.accent, 0.18)
@@ -2689,7 +3397,7 @@ Item {
           Flickable {
             id: bandFlick
             anchors.fill: parent
-            anchors.margins: Style.space(14)
+            anchors.margins: root.px(14)
             contentWidth: width
             contentHeight: bandColumn.implicitHeight
             clip: true
@@ -2721,11 +3429,11 @@ Item {
             QQC.ScrollBar.vertical: QQC.ScrollBar {
               id: bandScroll
               policy: bandFlick.contentHeight > bandFlick.height ? QQC.ScrollBar.AlwaysOn : QQC.ScrollBar.AlwaysOff
-              width: Style.space(6)
+              width: root.px(6)
               padding: 0
               background: Item {}
               contentItem: Rectangle {
-                implicitWidth: Style.space(4)
+                implicitWidth: root.px(4)
                 radius: width / 2
                 color: Util.alpha(root.foreground, bandScroll.pressed ? 0.55 : (bandScroll.hovered ? 0.40 : 0.22))
               }
@@ -2733,8 +3441,8 @@ Item {
 
             Column {
               id: bandColumn
-              width: bandFlick.width - Style.space(6)
-              spacing: Style.space(8)
+              width: bandFlick.width - root.px(6)
+              spacing: root.px(8)
 
               TextEdit {
                 visible: root.lastError !== ""
@@ -2746,7 +3454,7 @@ Item {
                 color: Color.urgent
                 text: root.lastError
                 font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
+                font.pixelSize: root.fontPx(Style.font.caption)
                 textFormat: TextEdit.PlainText
               }
 
@@ -2756,16 +3464,16 @@ Item {
                 Column {
                   required property var modelData
                   width: bandColumn.width
-                  spacing: Style.space(2)
+                  spacing: root.px(2)
 
                   Row {
-                    spacing: Style.space(8)
+                    spacing: root.px(8)
                     Text {
                       textFormat: Text.PlainText
                       text: modelData.role === "user" ? "You" : "Alfred"
                       color: modelData.role === "user" ? Color.accent : root.dim
                       font.family: root.fontFamily
-                      font.pixelSize: Style.font.caption
+                      font.pixelSize: root.fontPx(Style.font.caption)
                       font.bold: true
                       anchors.verticalCenter: parent.verticalCenter
                     }
@@ -2775,7 +3483,7 @@ Item {
                       text: Theme.glyph("copy")
                       color: copyHit.containsMouse ? root.foreground : root.dim
                       font.family: menuCodicon.name !== "" ? menuCodicon.name : "codicon"
-                      font.pixelSize: Style.space(Theme.iconPx())
+                      font.pixelSize: root.px(Theme.iconPx())
                       anchors.verticalCenter: parent.verticalCenter
                       z: 4
                       MouseArea {
@@ -2807,7 +3515,7 @@ Item {
                     selectionColor: Color.accent
                     text: modelData.text || ""
                     font.family: root.fontFamily
-                    font.pixelSize: Style.font.body
+                    font.pixelSize: root.fontPx(Style.font.body)
                     textFormat: TextEdit.PlainText
                     activeFocusOnPress: true
                     Keys.onPressed: function(event) {
@@ -2830,7 +3538,7 @@ Item {
                 text: root.busy ? "Thinking…" : "Ready."
                 color: root.dim
                 font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
+                font.pixelSize: root.fontPx(Style.font.caption)
               }
             }
           }
@@ -2839,9 +3547,9 @@ Item {
 
       Item {
         id: jumpWrap
-        readonly property bool shown: root.showThread && bandFlick.interactive && bandFlick.distanceToEnd > Style.space(24)
+        readonly property bool shown: root.showThread && bandFlick.interactive && bandFlick.distanceToEnd > root.px(24)
         width: parent.width
-        height: shown ? Style.space(36) : 0
+        height: shown ? root.px(36) : 0
         clip: true
         opacity: shown ? 1 : 0
 
@@ -2855,8 +3563,8 @@ Item {
         Rectangle {
           anchors.horizontalCenter: parent.horizontalCenter
           anchors.bottom: parent.bottom
-          height: Style.space(28)
-          width: jumpInner.implicitWidth + Style.space(22)
+          height: root.px(28)
+          width: jumpInner.implicitWidth + root.px(22)
           radius: height / 2
           color: jumpHit.containsMouse ? Qt.darker(root.sheet, 0.85) : root.sheet
           border.width: 1
@@ -2865,14 +3573,14 @@ Item {
           Row {
             id: jumpInner
             anchors.centerIn: parent
-            spacing: Style.space(6)
+            spacing: root.px(6)
 
             Text {
               textFormat: Text.PlainText
               text: Theme.glyph("arrow-down")
               color: jumpHit.containsMouse ? root.foreground : root.dim
               font.family: menuCodicon.name !== "" ? menuCodicon.name : "codicon"
-              font.pixelSize: Style.space(12)
+              font.pixelSize: root.px(12)
               anchors.verticalCenter: parent.verticalCenter
             }
 
@@ -2882,7 +3590,7 @@ Item {
               color: root.foreground
               opacity: jumpHit.containsMouse ? 1 : 0.8
               font.family: root.fontFamily
-              font.pixelSize: Style.font.caption
+              font.pixelSize: root.fontPx(Style.font.caption)
               anchors.verticalCenter: parent.verticalCenter
             }
           }

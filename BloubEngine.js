@@ -1698,24 +1698,37 @@ var Bloub = (() => {
 
   // bloubs/bridge.ts
   var CYCLES = {
-    // bloub-idle / -idle-2 / -idle-3: three different 10s films.
+    // Inspired by bloub-idle{1,2,3}-new.mp4 (10s each, 2026-10-05).
+    // Sleep stays out: that hop reads as a nap, not as rest.
+    // Holds sit above MIN_BLOCK / minDuration. Adjacent blocks, and the
+    // wrap from last to first, never share a state: setState ignores a
+    // no-op, so two idles in a row would freeze the face.
+    //
+    // Idle 1 (calm, squircle in the film): rest, wink, rest, a glance wide.
+    // The first rest is the settle; the wink is the beat; wide is the
+    // follow-through that hands back to idle. Loop 10.0s.
     idle0: [
-      { state: "sleep", duration: 2.5 },
-      { state: "wide", duration: 2.5 },
-      { state: "idle", duration: 2.5 },
-      { state: "wink", duration: 2.5 }
+      { state: "idle", duration: 2.8 },
+      { state: "wink", duration: 1.6 },
+      { state: "idle", duration: 3.8 },
+      { state: "wide", duration: 1.8 }
     ],
+    // Idle 2 (curious): rest, look around (egg), rest, then a hexagon lean.
+    // Egg is the glance; hexagon is the stretch before the loop sits again.
+    // Loop 10.0s.
     idle1: [
-      { state: "sleep", duration: 2.5 },
-      { state: "idle", duration: 2.5 },
-      { state: "wide", duration: 2.5 },
-      { state: "wink", duration: 2.5 }
+      { state: "idle", duration: 3.2 },
+      { state: "egg", duration: 1.8 },
+      { state: "idle", duration: 3.4 },
+      { state: "hexagon", duration: 1.6 }
     ],
+    // Idle 3 (playful): wink, sit, open the eyes, then a hexagon lean so
+    // the wrap back to wink is a morph, not a no-op. Loop 10.0s.
     idle2: [
-      { state: "wink", duration: 2.5 },
-      { state: "idle", duration: 2.5 },
-      { state: "sleep", duration: 2.5 },
-      { state: "wide", duration: 2.5 }
+      { state: "wink", duration: 1.6 },
+      { state: "idle", duration: 3.4 },
+      { state: "wide", duration: 1.8 },
+      { state: "hexagon", duration: 3.2 }
     ],
     // Kept so a hand-built play() can still ask. The director does not schedule them.
     start: [{ state: "comet", duration: 2.5 }],
@@ -1740,9 +1753,9 @@ var Bloub = (() => {
     end: [{ state: "burst", duration: 2.5 }],
     // Voice: rest states only, so the attentive expression stays on the face.
     listening: [
-      { state: "idle", duration: 2.4 },
+      { state: "idle", duration: 3.4 },
       { state: "wide", duration: 2.2 },
-      { state: "idle", duration: 2 },
+      { state: "idle", duration: 2.8 },
       { state: "wink", duration: 1.6 }
     ]
   };
@@ -2038,12 +2051,50 @@ var Bloub = (() => {
   function release(id) {
     players.delete(String(id || ""));
   }
+  function stillTick(shapeId, expressionId, fill) {
+    const shape = SHAPE_BY_ID.get(shapeId);
+    const expression = EXPRESSION_BY_ID.get(expressionId) || null;
+    const engine = new BotEngine(100, "idle", shape ? shape.radii : null, expression);
+    engine.reset("idle", 0);
+    return present(engine.sample(0), fill, "idle", "idle");
+  }
+  function present(frame, fill, clip, state) {
+    const ink = hexOf(fill);
+    const eyes = [];
+    for (let i = 0; i < frame.eyes.length; i++) {
+      const eye2 = frame.eyes[i];
+      eyes.push(__spreadValues({ path: eye2.d, alpha: eye2.alpha }, parseMatrix(eye2.matrix)));
+    }
+    const arcsBack = [];
+    const arcsFront = [];
+    for (let i = 0; i < frame.arcs.length; i++) {
+      const arc = frame.arcs[i];
+      arcsBack.push(arcRecord(arc, "back"));
+      arcsFront.push(arcRecord(arc, "front"));
+    }
+    const dots = [];
+    for (let i = 0; i < frame.dots.length; i++) dots.push(dotRecord(frame.dots[i], ink));
+    return {
+      body: frame.bodyPath,
+      alpha: frame.bodyAlpha,
+      eyes,
+      arcsBack,
+      arcsFront,
+      dots,
+      dotsBehind: frame.dotsBehind,
+      span: pathSpan(frame.bodyPath),
+      notif: frame.notif ? circlePath(frame.notif.x, frame.notif.y, frame.notif.r) : "",
+      clip,
+      state
+    };
+  }
   function tick(id, nowMs, shapeRaw, expressionRaw, mood, idleVariant, phase, fill, eyesRaw, flow) {
     const key = String(id || "blob");
     const shapeId = shapeIdOf(shapeRaw);
     const expressionId = expressionIdOf(expressionRaw, eyesRaw, mood);
-    const clock = (Number(nowMs) || 0) / 1e3 + (Number(phase) || 0);
     const flowMode = String(flow || "");
+    if (flowMode === "still") return stillTick(shapeId, expressionId, fill);
+    const clock = (Number(nowMs) || 0) / 1e3 + (Number(phase) || 0);
     let timeline;
     if (flowMode === "compact" || flowMode === "open") {
       const agentKey = key.indexOf("/") >= 0 ? key.slice(0, key.lastIndexOf("/")) : key;
@@ -2084,35 +2135,7 @@ var Bloub = (() => {
       player.blockAt = start;
       player.state = placed.state;
     }
-    const frame = player.engine.sample(clock);
-    const ink = hexOf(fill);
-    const eyes = [];
-    for (let i = 0; i < frame.eyes.length; i++) {
-      const eye2 = frame.eyes[i];
-      eyes.push(__spreadValues({ path: eye2.d, alpha: eye2.alpha }, parseMatrix(eye2.matrix)));
-    }
-    const arcsBack = [];
-    const arcsFront = [];
-    for (let i = 0; i < frame.arcs.length; i++) {
-      const arc = frame.arcs[i];
-      arcsBack.push(arcRecord(arc, "back"));
-      arcsFront.push(arcRecord(arc, "front"));
-    }
-    const dots = [];
-    for (let i = 0; i < frame.dots.length; i++) dots.push(dotRecord(frame.dots[i], ink));
-    return {
-      body: frame.bodyPath,
-      alpha: frame.bodyAlpha,
-      eyes,
-      arcsBack,
-      arcsFront,
-      dots,
-      dotsBehind: frame.dotsBehind,
-      span: pathSpan(frame.bodyPath),
-      notif: frame.notif ? circlePath(frame.notif.x, frame.notif.y, frame.notif.r) : "",
-      clip: placed.clip,
-      state: placed.state
-    };
+    return present(player.engine.sample(clock), fill, placed.clip, placed.state);
   }
   return __toCommonJS(bridge_exports);
 })();
