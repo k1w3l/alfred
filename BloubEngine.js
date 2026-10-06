@@ -1698,64 +1698,77 @@ var Bloub = (() => {
 
   // bloubs/bridge.ts
   var CYCLES = {
-    // Inspired by bloub-idle{1,2,3}-new.mp4 (10s each, 2026-10-05).
-    // Sleep stays out: that hop reads as a nap, not as rest.
-    // Holds sit above MIN_BLOCK / minDuration. Adjacent blocks, and the
-    // wrap from last to first, never share a state: setState ignores a
-    // no-op, so two idles in a row would freeze the face.
-    //
-    // Idle 1 (calm, squircle in the film): rest, wink, rest, a glance wide.
-    // The first rest is the settle; the wink is the beat; wide is the
-    // follow-through that hands back to idle. Loop 10.0s.
+    // Idle 1 — butler. Courtesy, a longer exhale, one glance across the room.
+    // Rests 3.6 then 5.4. Loop 12.4s.
     idle0: [
-      { state: "idle", duration: 2.8 },
+      { state: "idle", duration: 3.6 },
       { state: "wink", duration: 1.6 },
-      { state: "idle", duration: 3.8 },
+      { state: "idle", duration: 5.4 },
       { state: "wide", duration: 1.8 }
     ],
-    // Idle 2 (curious): rest, look around (egg), rest, then a hexagon lean.
-    // Egg is the glance; hexagon is the stretch before the loop sits again.
-    // Loop 10.0s.
+    // Idle 2 — curious. Look, a short gap so the lean feels prepared, lean,
+    // long settle, a brighter coda. Holds 2.4 / 1.2 / 4.2. Loop 13.0s.
     idle1: [
-      { state: "idle", duration: 3.2 },
+      { state: "idle", duration: 2.4 },
       { state: "egg", duration: 1.8 },
-      { state: "idle", duration: 3.4 },
-      { state: "hexagon", duration: 1.6 }
+      { state: "idle", duration: 1.2 },
+      { state: "hexagon", duration: 1.6 },
+      { state: "idle", duration: 4.2 },
+      { state: "wide", duration: 1.8 }
     ],
-    // Idle 3 (playful): wink, sit, open the eyes, then a hexagon lean so
-    // the wrap back to wink is a morph, not a no-op. Loop 10.0s.
+    // Idle 3 — short fuse. Wink, glare, lean, then a long settle so the next
+    // wink lands late. Holds 1.8 / 1.2 / 4.6. Loop 12.6s.
     idle2: [
       { state: "wink", duration: 1.6 },
-      { state: "idle", duration: 3.4 },
+      { state: "idle", duration: 1.8 },
       { state: "wide", duration: 1.8 },
-      { state: "hexagon", duration: 3.2 }
+      { state: "idle", duration: 1.2 },
+      { state: "hexagon", duration: 1.6 },
+      { state: "idle", duration: 4.6 }
     ],
-    // Kept so a hand-built play() can still ask. The director does not schedule them.
-    start: [{ state: "comet", duration: 2.5 }],
+    // Hand-built only. The director does not schedule these.
+    // Comet recomposes at 2.45; the last 0.05s finishes in the next fade.
+    start: [{ state: "comet", duration: 2.4 }],
+    // Wind-up, then the bouquet. Its opacity hits 0 at t = 2.2.
     startWork: [
-      { state: "idle", duration: 2.5 },
-      { state: "play", duration: 2.5 }
+      { state: "idle", duration: 1 },
+      { state: "play", duration: 2.2 }
     ],
-    working: [{ state: "thinking", duration: 5 }],
+    // Dots are the hero (~60%). The glance is short; their own face holds
+    // longer. Re-entering thinking replays the 0.3s emerge. Loop 8.5s.
+    working: [
+      { state: "thinking", duration: 5.2 },
+      { state: "wide", duration: 1.1 },
+      { state: "idle", duration: 2.2 }
+    ],
+    // Open eyes, then the mark for its measured hold. The next wide, on the
+    // repeat, is the recovery. 2.9s, played three times.
     error: [
-      { state: "wide", duration: 2.5 },
-      { state: "exclaim", duration: 2.5 }
+      { state: "wide", duration: 0.9 },
+      { state: "exclaim", duration: 2 }
     ],
+    // Look, then the full travel: out over 1.5s, back by 2.0, a 0.4s settle.
+    // 3.3s, played three times.
     attention: [
-      { state: "wide", duration: 2.5 },
-      { state: "alert", duration: 2.5 }
+      { state: "wide", duration: 0.9 },
+      { state: "alert", duration: 2.4 }
     ],
-    success: [
-      { state: "orbit", duration: 3.6 },
-      { state: "idle", duration: 1.4 }
-    ],
-    notification: [{ state: "notify", duration: 5 }],
-    end: [{ state: "burst", duration: 2.5 }],
-    // Voice: rest states only, so the attentive expression stays on the face.
+    // One bow. Rings enter over 0.8s, the body has relaxed by 2.5s, and at
+    // 3.4s the rings are nearly gone (their fade ends at 3.6). Played once:
+    // repeating a finished scene reads as a stuck loop.
+    success: [{ state: "orbit", duration: 3.4 }],
+    // The badge is the signal. One block never re-enters, so the pop plays
+    // on the way in and the pill holds. Another state would drop the badge.
+    notification: [{ state: "notify", duration: 2.2 }],
+    // Collapse, hold, regrow (done at 2.4). The extra 0.2s is the face back
+    // before the morph into rest.
+    end: [{ state: "burst", duration: 2.6 }],
+    // Attentive expression only survives on idle (other states bring their
+    // own face). Lean in, come back sooner, small ack. Idle is 6.4 of 9.8s.
     listening: [
-      { state: "idle", duration: 3.4 },
-      { state: "wide", duration: 2.2 },
-      { state: "idle", duration: 2.8 },
+      { state: "idle", duration: 3.8 },
+      { state: "egg", duration: 1.8 },
+      { state: "idle", duration: 2.6 },
       { state: "wink", duration: 1.6 }
     ]
   };
@@ -1813,6 +1826,9 @@ var Bloub = (() => {
     permission: "attention",
     attention: "attention"
   };
+  function beatsOf(clip) {
+    return clip === "success" ? 1 : 3;
+  }
   var players = /* @__PURE__ */ new Map();
   var directors = /* @__PURE__ */ new Map();
   var timelineSerial = 0;
@@ -1914,7 +1930,7 @@ var Bloub = (() => {
       if (compact) {
         if (mood !== wasMood && OUTCOME_CLIP[mood] && !busy) {
           d.latched = OUTCOME_CLIP[mood];
-          d.timeline = compile([{ cycle: d.latched, repeat: 3 }, { cycle: tailOf(d, idleVariant) }], clock);
+          d.timeline = compile([{ cycle: d.latched, repeat: beatsOf(d.latched) }, { cycle: tailOf(d, idleVariant) }], clock);
           return d;
         }
         const tail = tailOf(d, idleVariant);
@@ -1947,7 +1963,7 @@ var Bloub = (() => {
     const outcome = OUTCOME_CLIP[mood];
     if (outcome) {
       d.latched = compact ? outcome : "";
-      d.timeline = compile([{ cycle: outcome, repeat: 3 }, { cycle: tailOf(d, idleVariant) }], clock, prefix);
+      d.timeline = compile([{ cycle: outcome, repeat: beatsOf(outcome) }, { cycle: tailOf(d, idleVariant) }], clock, prefix);
       return d;
     }
     if (d.latched) return d;
