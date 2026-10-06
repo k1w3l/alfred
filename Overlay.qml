@@ -262,7 +262,7 @@ Item {
   readonly property var faceExpressions: ["neutre", "attentif", "surpris", "excite", "heureux", "hilare", "colere", "triste", "effraye", "mefiant", "confus", "curieux", "fier", "timide", "blase", "somnolent"]
   readonly property var faceExpressionLabels: ["Neutral", "Attentive", "Surprised", "Excited", "Happy", "Laughing", "Angry", "Sad", "Scared", "Suspicious", "Confused", "Curious", "Proud", "Shy", "Unimpressed", "Sleepy"]
   readonly property var faceIdles: ["0", "1", "2"]
-  readonly property var faceIdleLabels: ["Idle", "Idle 2", "Idle 3"]
+  readonly property var faceIdleLabels: ["Idle 1", "Idle 2", "Idle 3"]
   property string pickerMode: ""
   readonly property bool menuOpen: root.menuKind !== ""
   readonly property bool pickerOpen: root.pickerMode !== ""
@@ -535,6 +535,12 @@ Item {
     root.rebuildMenu()
   }
 
+  function idleIndex(value) {
+    var n = Number(value)
+    if (!isFinite(n)) return 0
+    return ((n % 3) + 3) % 3
+  }
+
   function eyesFor(expression) {
     var expr = String(expression || "")
     if (expr === "colere" || expr === "mefiant") return "angry"
@@ -551,7 +557,7 @@ Item {
     root.faceShape = String(data.shape || "cercle")
     root.faceFill = String(data.fill || "#0a0a0c").toLowerCase()
     root.faceExpression = String(data.expression || "neutre")
-    root.faceIdle = Number(data.idle || 0)
+    root.faceIdle = root.idleIndex(data.idle)
     root.facePhase = Number(data.phase || 0)
     root.menuKind = "face"
     root.rebuildMenu()
@@ -563,7 +569,7 @@ Item {
     if (which === "shape") root.faceShape = next
     else if (which === "fill") root.faceFill = next.toLowerCase()
     else if (which === "expression") root.faceExpression = next
-    else if (which === "idle") root.faceIdle = Number(next) || 0
+    else if (which === "idle") root.faceIdle = root.idleIndex(next)
   }
 
   function saveFace() {
@@ -1319,7 +1325,9 @@ Item {
 
     Column {
       id: hudColumn
-      width: root.pillWidth
+      // Compact listening draws the meter and OK beside the ball. The input
+      // mask is this column, so it has to be wide enough to contain them.
+      width: root.listening && !root.focused ? Math.max(root.pillWidth, voiceOkRow.implicitWidth) : root.pillWidth
       spacing: 0
       anchors.horizontalCenter: parent.horizontalCenter
       anchors.top: parent.top
@@ -1329,6 +1337,11 @@ Item {
       Behavior on width {
         NumberAnimation { duration: 220; easing.type: Easing.OutCubic }
       }
+
+      Item {
+        id: pillSlot
+        width: parent.width
+        height: pill.height
 
       Rectangle {
         id: pill
@@ -1341,7 +1354,8 @@ Item {
         property bool ringReady: false
         readonly property bool ringRunning: !root.compact && (root.listening || (root.mood === "busy" && !root.awaitingPermission))
 
-        width: parent.width
+        width: root.pillWidth
+        anchors.horizontalCenter: parent.horizontalCenter
         height: motionReady ? shownHeight : targetHeight
         onTargetHeightChanged: {
           if (!motionReady) return
@@ -1657,6 +1671,7 @@ Item {
           }
         }
       }
+      }
 
       Item {
         id: chipWrap
@@ -1942,44 +1957,53 @@ Item {
         }
       }
 
-      Row {
+      Item {
         visible: root.listening
+        width: parent.width
         height: root.listening ? root.px(36) : 0
-        spacing: root.px(8)
-        x: (parent.width - width) / 2
 
-        VoiceMeter {
-          width: root.px(188)
+        Row {
+          id: voiceOkRow
+          anchors.horizontalCenter: parent.horizontalCenter
+          width: implicitWidth
           height: parent.height
-          uiScale: root.uiScale
-          level: alfred ? alfred.audioLevel : 0
-          capturing: alfred ? alfred.voiceCapturing : false
-          hearing: alfred ? alfred.voiceHearing : false
-          elapsedMs: alfred ? alfred.voiceElapsedMs : 0
-        }
+          spacing: root.px(8)
 
-        Rectangle {
-          width: root.px(64)
-          height: parent.height
-          radius: height / 2
-          color: voiceOkHit.containsMouse ? Theme.moodRed() : Util.alpha(Theme.moodRed(), 0.88)
-
-          Text {
-            anchors.centerIn: parent
-            textFormat: Text.PlainText
-            text: "OK"
-            color: "#1a120c"
-            font.family: root.fontFamily
-            font.pixelSize: root.fontPx(Style.font.caption)
-            font.bold: true
+          VoiceMeter {
+            width: root.px(188)
+            height: parent.height
+            uiScale: root.uiScale
+            level: alfred ? alfred.audioLevel : 0
+            capturing: alfred ? alfred.voiceCapturing : false
+            hearing: alfred ? alfred.voiceHearing : false
+            elapsedMs: alfred ? alfred.voiceElapsedMs : 0
           }
 
-          MouseArea {
-            id: voiceOkHit
-            anchors.fill: parent
-            hoverEnabled: true
-            cursorShape: Qt.PointingHandCursor
-            onClicked: root.stopListen()
+          Rectangle {
+            width: root.px(64)
+            height: parent.height
+            radius: height / 2
+            color: voiceOkHit.containsMouse ? Theme.moodRed() : Util.alpha(Theme.moodRed(), 0.88)
+
+            Text {
+              anchors.centerIn: parent
+              textFormat: Text.PlainText
+              text: "OK"
+              color: "#1a120c"
+              font.family: root.fontFamily
+              font.pixelSize: root.fontPx(Style.font.caption)
+              font.bold: true
+            }
+
+            MouseArea {
+              id: voiceOkHit
+              anchors.fill: parent
+              hoverEnabled: true
+              cursorShape: Qt.PointingHandCursor
+              preventStealing: true
+              onPressed: function(mouse) { mouse.accepted = true }
+              onClicked: root.stopListen()
+            }
           }
         }
       }
@@ -2709,7 +2733,7 @@ Item {
                         shape: String(data.shape || "cercle"),
                         fill: String(data.fill || "#0a0a0c"),
                         expression: String(data.expression || "neutre"),
-                        idle: Number(data.idle || 0),
+                        idle: root.idleIndex(data.idle),
                         phase: Number(data.phase || 0)
                       }
                       Qt.callLater(function() { root.openFaceEditor(snap) })
@@ -2783,7 +2807,7 @@ Item {
                     var itemShape = group.kind === "shape" ? value : shape
                     var itemFill = group.kind === "fill" ? value : fill
                     var itemExpr = group.kind === "expression" ? value : expr
-                    var itemIdle = group.kind === "idle" ? (Number(value) || 0) : idle
+                    var itemIdle = group.kind === "idle" ? root.idleIndex(value) : idle
                     var chosen = false
                     if (group.kind === "shape") chosen = shape === value
                     else if (group.kind === "fill") chosen = fill.toLowerCase() === value.toLowerCase()

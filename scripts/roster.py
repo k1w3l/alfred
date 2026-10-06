@@ -105,6 +105,18 @@ def eyes_of(expression: str) -> str:
     return "soft"
 
 
+def parse_idle(raw, fallback: int) -> int:
+    # Idle 1 is stored as 0. A falsy check (`or ""`) drops it and the hash
+    # picks another film, so that choice never sticks.
+    if raw is None or isinstance(raw, bool):
+        text = ""
+    else:
+        text = str(raw).strip()
+    if text.lstrip("-").isdigit():
+        return int(text) % 3
+    return fallback % 3
+
+
 def face_from(shape: str, fill: str, expression: str, idle: int, key: str) -> dict:
     expr = expression if expression in EXPRESSIONS else "neutre"
     return {
@@ -122,7 +134,7 @@ def emoji_for(gateway_id: str, profile_id: str, label: str, overrides: dict) -> 
     custom = overrides.get(key) if isinstance(overrides, dict) else None
     if isinstance(custom, dict) and custom.get("shape") and custom.get("fill"):
         expression = str(custom.get("expression") or EYES_ALIAS.get(str(custom.get("eyes") or ""), "neutre"))
-        idle = int(custom.get("idle")) if str(custom.get("idle") or "").lstrip("-").isdigit() else digest_of(key) % 3
+        idle = parse_idle(custom.get("idle"), digest_of(key))
         return face_from(str(custom.get("shape")), str(custom.get("fill")), expression, idle, key)
     label_l = label.lower()
     pid = profile_id.lower()
@@ -406,11 +418,10 @@ def set_face(key: str, shape: str, fill: str, expression: str, idle: str | None 
     overrides = _emoji_overrides(state)
     previous = overrides.get(resolved) if isinstance(overrides.get(resolved), dict) else {}
     entry = {"shape": shape_n, "fill": fill_n, "expression": expr_n}
-    idle_text = str(idle).strip() if idle is not None else ""
-    if idle_text.lstrip("-").isdigit():
-        entry["idle"] = int(idle_text) % 3
-    elif str(previous.get("idle") or "").lstrip("-").isdigit():
-        entry["idle"] = int(previous["idle"]) % 3
+    if idle is not None and str(idle).strip() != "":
+        entry["idle"] = parse_idle(idle, 0)
+    elif "idle" in previous:
+        entry["idle"] = parse_idle(previous.get("idle"), 0)
     overrides[resolved] = entry
     state["profileEmoji"] = overrides
     save_state(state)
@@ -455,7 +466,7 @@ def payload(rows: list[dict], selected: str, warnings: list[str], binds_changed:
         "shape": current["shape"],
         "fill": current["fill"],
         "expression": current.get("expression") or "neutre",
-        "idle": current.get("idle") or 0,
+        "idle": parse_idle(current.get("idle"), 0),
         "phase": current.get("phase") or 0,
         "eyes": current["eyes"],
         "profiles": rows,
