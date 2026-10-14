@@ -7,6 +7,8 @@ run `hermes profile use`. Remote rows do not touch the local sticky profile.
 
   roster.py list
   roster.py set <key|profile-name>
+  roster.py hide <key>
+  roster.py show <key>
   roster.py face <key> <shape> <fill> <expression> [idle]
   roster.py face-reset <key>
 """
@@ -298,24 +300,53 @@ def build_roster(state: dict) -> tuple[list[dict], list[str]]:
                     "idle": face["idle"],
                     "phase": face["phase"],
                     "eyes": face["eyes"],
+                    "hidden": False,
                     "selected": False,
                 }
             )
+    mark_hidden(roster, state)
     return roster, warnings
 
 
+def hidden_keys(state: dict) -> list[str]:
+    raw = state.get("hiddenProfiles") if isinstance(state, dict) else None
+    if not isinstance(raw, list):
+        return []
+    keys: list[str] = []
+    seen: set[str] = set()
+    for item in raw:
+        key = str(item or "").strip()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        keys.append(key)
+    return keys
+
+
+def mark_hidden(rows: list[dict], state: dict) -> None:
+    hidden = set(hidden_keys(state))
+    for row in rows:
+        row["hidden"] = row["key"] in hidden
+
+
+def visible_rows(rows: list[dict]) -> list[dict]:
+    shown = [row for row in rows if not row.get("hidden")]
+    return shown or rows
+
+
 def current_key(state: dict, rows: list[dict]) -> str:
-    keys = {row["key"] for row in rows}
+    pool = visible_rows(rows)
+    keys = {row["key"] for row in pool}
     stored = str(state.get("profileKey") or "").strip()
     if stored in keys:
         return stored
     guess = f"{str(state.get('connectionId') or 'local')}:{str(state.get('profileName') or 'default')}"
     if guess in keys:
         return guess
-    for row in rows:
+    for row in pool:
         if row["gatewayKind"] == "local" and row["profileId"] == "default":
             return row["key"]
-    return rows[0]["key"] if rows else "local:default"
+    return pool[0]["key"] if pool else "local:default"
 
 
 def resolve_key(rows: list[dict], want: str) -> str:
@@ -346,7 +377,7 @@ def default_binds(rows: list[dict]) -> list[dict]:
 
 
 def sync_binds(state: dict, rows: list[dict]) -> bool:
-    binds = default_binds(rows)
+    binds = default_binds(visible_rows(rows))
     if state.get("profileBinds") == binds:
         return False
     state["profileBinds"] = binds
@@ -440,9 +471,40 @@ def reset_face(key: str) -> None:
     save_state(state)
 
 
+def set_visibility(key: str, hide: bool) -> None:
+    state = load_state()
+    if not isinstance(state, dict):
+        state = {}
+    rows, _warnings = build_roster(state)
+    resolved = resolve_key(rows, key)
+    if not resolved:
+        raise ValueError(f"unknown profile: {key}")
+    hidden = hidden_keys(state)
+    if hide:
+        if resolved in hidden:
+            return
+        visible = [row for row in rows if row["key"] not in set(hidden)]
+        if len(visible) <= 1:
+            raise ValueError("keep at least one profile visible")
+        hidden.append(resolved)
+    else:
+        hidden = [item for item in hidden if item != resolved]
+    state["hiddenProfiles"] = hidden
+    save_state(state)
+
+
 def emit_roster() -> None:
     state = load_state()
+    if not isinstance(state, dict):
+        state = {}
     rows, warnings = build_roster(state)
+    stored = str(state.get("profileKey") or "").strip()
+    if stored and any(row["key"] == stored and row.get("hidden") for row in rows):
+        selected = current_key(state, rows)
+        if selected and selected != stored:
+            rows, selected, warnings, changed = apply_selection(selected)
+            print(json.dumps(payload(rows, selected, warnings, changed), ensure_ascii=False))
+            return
     selected = current_key(state, rows)
     changed = sync_binds(state, rows)
     state = load_state()
@@ -490,6 +552,12 @@ def apply_selection(key: str) -> tuple[list[dict], str, list[str], bool]:
     resolved = resolve_key(rows, key)
     if not resolved:
         raise ValueError(f"unknown profile: {key}")
+    hidden = hidden_keys(state)
+    if resolved in hidden:
+        state["hiddenProfiles"] = [item for item in hidden if item != resolved]
+        save_state(state)
+        state = load_state()
+        rows, warnings = build_roster(state)
     chosen = next(row for row in rows if row["key"] == resolved)
     if chosen["gatewayKind"] == "local":
         local_profiles.set_profile(chosen["profileId"])
@@ -512,6 +580,16 @@ def main() -> int:
             arg = sys.argv[2] if len(sys.argv) > 2 else ""
             rows, selected, warnings, changed = apply_selection(arg)
             print(json.dumps(payload(rows, selected, warnings, changed), ensure_ascii=False))
+        elif mode == "hide":
+            if len(sys.argv) != 3:
+                raise ValueError("usage: roster.py hide <key>")
+            set_visibility(sys.argv[2], True)
+            emit_roster()
+        elif mode == "show":
+            if len(sys.argv) != 3:
+                raise ValueError("usage: roster.py show <key>")
+            set_visibility(sys.argv[2], False)
+            emit_roster()
         elif mode == "face":
             if len(sys.argv) not in (6, 7):
                 raise ValueError("usage: roster.py face <key> <shape> <fill> <expression> [idle]")

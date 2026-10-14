@@ -1,7 +1,7 @@
 #!/usr/bin/env fish
 
 # Profiles across the local gateway and remote Desktop gateways.
-# Modes: list | set <gateway:profile> | face <key> <shape> <fill> <expression> [idle] | face-reset <key>
+# Modes: list | set <gateway:profile> | hide <key> | show <key> | face <key> <shape> <fill> <expression> [idle] | face-reset <key>
 # stdout: JSON
 
 set -gx PATH /usr/bin /usr/local/bin $HOME/.local/bin $PATH

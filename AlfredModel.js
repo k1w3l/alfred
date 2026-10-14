@@ -245,6 +245,7 @@ function parseRoster(raw) {
         idle: Number(row.idle || 0),
         phase: Number(row.phase || 0),
         eyes: String(row.eyes || "soft"),
+        hidden: row.hidden === true,
         selected: row.selected === true || key === String(parsed.current || "")
       })
     }
@@ -294,12 +295,22 @@ function rosterKeyForGateway(roster, gatewayId, profileName) {
   var first = ""
   for (var i = 0; i < rows.length; i++) {
     var row = rows[i]
-    if (!row || String(row.gatewayId) !== gid) continue
+    if (!row || String(row.gatewayId) !== gid || row.hidden === true) continue
     if (String(row.profileId) === want) return String(row.key)
     if (String(row.profileId) === "default" && fallback === "") fallback = String(row.key)
     if (first === "") first = String(row.key)
   }
   return fallback !== "" ? fallback : first
+}
+
+function gatewayHasRows(roster, gatewayId) {
+  var rows = Array.isArray(roster) ? roster : []
+  var gid = String(gatewayId || "")
+  for (var i = 0; i < rows.length; i++) {
+    var row = rows[i]
+    if (row && String(row.gatewayId) === gid) return true
+  }
+  return false
 }
 
 function parseProfiles(raw) {

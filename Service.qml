@@ -566,9 +566,10 @@ Item {
   function setGateway(id) {
     var value = String(id || "").trim()
     if (value === "") return false
-    // Gateway and profile move together: pick the same profile on the new gateway, else its default.
+    // Gateway and profile move together: pick the same visible profile on the new gateway, else its default.
     var key = AlfredModel.rosterKeyForGateway(root.roster, value, root.profileName)
     if (key !== "") return root.selectProfile(key)
+    if (AlfredModel.gatewayHasRows(root.roster, value)) return false
     if (setGatewayProcess.running) return false
     root.rosterSeq += 1
     gatewayConnectionId = value
@@ -657,6 +658,18 @@ Item {
     return true
   }
 
+  function setProfileVisibility(key, hide) {
+    var value = String(key || "").trim()
+    if (value === "") return false
+    var job = { op: hide === true ? "hide" : "show", key: value, shape: "", fill: "", expression: "" }
+    if (setRosterProcess.running || rosterProcess.running) {
+      root.pendingFace = job
+      return true
+    }
+    root.startFaceJob(job)
+    return true
+  }
+
   function startFaceJob(job) {
     if (!job) return
     if (setRosterProcess.running || rosterProcess.running) {
@@ -668,7 +681,9 @@ Item {
     if (key === "") return
     root.rosterWriteKind = op
     root.rosterSeq += 1
-    if (op === "face-reset")
+    if (op === "hide" || op === "show")
+      setRosterProcess.command = ["fish", "--no-config", root.pluginDir + "/scripts/roster.fish", op, key]
+    else if (op === "face-reset")
       setRosterProcess.command = ["fish", "--no-config", root.pluginDir + "/scripts/roster.fish", "face-reset", key]
     else
       setRosterProcess.command = ["fish", "--no-config", root.pluginDir + "/scripts/roster.fish", "face", key, String(job.shape || ""), String(job.fill || ""), String(job.expression || ""), String(job.idle === undefined || job.idle === null ? "" : job.idle)]
@@ -1371,18 +1386,20 @@ Item {
     }
     stderr: StdioCollector { waitForEnd: true }
     onExited: function() {
+      var previousKey = root.profileKey
       root.applyRoster(setRosterOut.text)
       var kind = root.rosterWriteKind
       root.rosterWriteKind = ""
+      var moved = previousKey !== root.profileKey
       if (root.pendingFace && !rosterProcess.running) {
         var face = root.pendingFace
         root.pendingFace = null
         Qt.callLater(function() { root.startFaceJob(face) })
-        if (kind === "set") {
+        if (kind === "set" || (kind === "hide" && moved)) {
           root.refreshStatus()
           root.refreshGateways()
           root.afterProfileChange()
-          root.flushPendingSend()
+          if (kind === "set") root.flushPendingSend()
         }
         return
       }
@@ -1392,7 +1409,8 @@ Item {
         Qt.callLater(function() { root.selectProfile(next) })
         return
       }
-      if (kind === "face" || kind === "face-reset") return
+      if (kind === "face" || kind === "face-reset" || kind === "show") return
+      if (kind === "hide" && !moved) return
       root.refreshStatus()
       root.refreshGateways()
       root.afterProfileChange()

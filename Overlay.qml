@@ -224,6 +224,33 @@ Item {
   readonly property string profileEyes: alfred ? String(alfred.profileEyes || "soft") : "soft"
   readonly property var profileOptions: alfred && alfred.profileOptions ? alfred.profileOptions : []
   readonly property var roster: alfred && alfred.roster ? alfred.roster : []
+  readonly property var visibleRoster: {
+    var rows = root.roster || []
+    var out = []
+    var i
+    for (i = 0; i < rows.length; i++) {
+      var row = rows[i]
+      if (row && row.hidden !== true) out.push(row)
+    }
+    return out
+  }
+  readonly property var profileMenuModel: {
+    var rows = root.roster || []
+    var shown = []
+    var parked = []
+    var i
+    for (i = 0; i < rows.length; i++) {
+      var row = rows[i]
+      if (!row) continue
+      if (row.hidden === true) parked.push(row)
+      else shown.push(row)
+    }
+    if (parked.length > 0) {
+      shown.push({ rowType: "header", label: "HIDDEN" })
+      for (i = 0; i < parked.length; i++) shown.push(parked[i])
+    }
+    return shown
+  }
   readonly property string gatewayKind: alfred ? String(alfred.gatewayKind || "local") : "local"
   readonly property bool anyBusy: alfred ? alfred.anyBusy === true : false
   readonly property var chats: alfred && alfred.chats ? alfred.chats : []
@@ -947,6 +974,11 @@ Item {
     if (alfred && typeof alfred.setProfile === "function") alfred.setProfile(id)
   }
 
+  function setProfileVisibility(key, hide) {
+    if (alfred && typeof alfred.setProfileVisibility === "function")
+      alfred.setProfileVisibility(key, hide === true)
+  }
+
   function startListen() {
     root.closeMenus()
     if (alfred && typeof alfred.startVoice === "function") alfred.startVoice()
@@ -1574,7 +1606,7 @@ Item {
                 spacing: root.controlGap
 
                 Repeater {
-                  model: root.focused ? root.roster : 0
+                  model: root.focused ? root.visibleRoster : 0
 
                   Item {
                     id: profileChip
@@ -2010,7 +2042,7 @@ Item {
 
       Item {
         id: menuWrap
-        readonly property real targetHeight: root.focused && root.menuOpen && !root.pickerOpen && !root.slashPanelOpen ? Math.min(menuCol.implicitHeight + root.px(20), root.px(root.menuKind === "shortcuts" ? 420 : root.menuKind === "face" ? 560 : 320)) : 0
+        readonly property real targetHeight: root.focused && root.menuOpen && !root.pickerOpen && !root.slashPanelOpen ? Math.min(menuCol.implicitHeight + root.px(20), root.px(root.menuKind === "shortcuts" || root.menuKind === "profile" ? 420 : root.menuKind === "face" ? 560 : 320)) : 0
         property real shownHeight: 0
         property real shownOpacity: 0
         property real shownScale: 0.98
@@ -2628,23 +2660,45 @@ Item {
             }
 
             Repeater {
-              model: root.menuKind === "profile" ? root.roster : 0
+              model: root.menuKind === "profile" ? root.profileMenuModel : 0
 
               Rectangle {
                 id: profileRow
                 required property var modelData
-                readonly property bool current: String(modelData.key || modelData.id || "") === root.profileKey
+                readonly property bool header: String(modelData.rowType || "") === "header"
+                readonly property bool parked: !header && modelData.hidden === true
+                readonly property bool current: !header && String(modelData.key || modelData.id || "") === root.profileKey
+                readonly property bool canToggle: header ? false : (parked || root.visibleRoster.length > 1)
                 width: menuCol.width
-                height: root.px(40)
+                height: header ? root.px(24) : root.px(40)
                 radius: root.px(6)
-                color: profileRow.current
-                  ? Util.alpha(Color.accent, 0.18)
-                  : (profileHit.containsMouse ? Util.alpha(Color.foreground, 0.08) : "transparent")
+                color: header || profileRow.parked
+                  ? "transparent"
+                  : (profileRow.current
+                    ? Util.alpha(Color.accent, 0.18)
+                    : (profileHit.containsMouse ? Util.alpha(Color.foreground, 0.08) : "transparent"))
+
+                Text {
+                  visible: profileRow.header
+                  anchors.left: parent.left
+                  anchors.leftMargin: root.px(8)
+                  anchors.bottom: parent.bottom
+                  anchors.bottomMargin: root.px(4)
+                  textFormat: Text.PlainText
+                  text: String(profileRow.modelData.label || "")
+                  color: root.dim
+                  opacity: 0.7
+                  font.family: root.fontFamily
+                  font.pixelSize: root.fontPx(Style.font.caption)
+                  font.letterSpacing: 1
+                }
 
                 Row {
                   id: profileBody
+                  visible: !profileRow.header
+                  opacity: profileRow.parked ? 0.55 : 1
                   anchors.left: parent.left
-                  anchors.right: faceEdit.left
+                  anchors.right: hideToggle.left
                   anchors.top: parent.top
                   anchors.bottom: parent.bottom
                   anchors.leftMargin: root.px(8)
@@ -2653,6 +2707,7 @@ Item {
 
                   ProfileBlob {
                     id: profileFace
+                    visible: !profileRow.header
                     width: root.px(22)
                     height: root.px(22)
                     anchors.verticalCenter: parent.verticalCenter
@@ -2701,9 +2756,51 @@ Item {
                 }
 
                 Item {
+                  id: hideToggle
+                  z: 2
+                  visible: !profileRow.header
+                  width: profileRow.header ? 0 : root.px(28)
+                  height: root.px(32)
+                  anchors.right: faceEdit.left
+                  anchors.verticalCenter: parent.verticalCenter
+                  opacity: profileRow.canToggle ? 1 : 0.35
+
+                  Text {
+                    anchors.centerIn: parent
+                    textFormat: Text.PlainText
+                    text: Theme.glyph(profileRow.parked ? "eye" : "eye-closed")
+                    color: hideHit.containsMouse && profileRow.canToggle ? root.foreground : root.dim
+                    font.family: menuCodicon.name !== "" ? menuCodicon.name : "codicon"
+                    font.pixelSize: root.px(Theme.iconPx())
+                  }
+
+                  MouseArea {
+                    id: hideHit
+                    anchors.fill: parent
+                    enabled: profileRow.canToggle
+                    hoverEnabled: true
+                    cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+                    preventStealing: true
+                    onPressed: function(mouse) {
+                      mouse.accepted = true
+                      var id = String(profileRow.modelData.key || profileRow.modelData.id || "")
+                      var hide = !profileRow.parked
+                      Qt.callLater(function() { root.setProfileVisibility(id, hide) })
+                    }
+                  }
+
+                  QQC.ToolTip {
+                    visible: hideHit.containsMouse && profileRow.canToggle
+                    delay: 400
+                    text: profileRow.parked ? "Show in Alfred" : "Hide from Alfred"
+                  }
+                }
+
+                Item {
                   id: faceEdit
                   z: 2
-                  width: root.px(32)
+                  visible: !profileRow.header
+                  width: profileRow.header ? 0 : root.px(32)
                   height: root.px(32)
                   anchors.right: parent.right
                   anchors.rightMargin: root.px(4)
@@ -2747,12 +2844,14 @@ Item {
                   anchors.left: parent.left
                   anchors.top: parent.top
                   anchors.bottom: parent.bottom
-                  anchors.right: faceEdit.left
-                  hoverEnabled: true
-                  cursorShape: Qt.PointingHandCursor
+                  anchors.right: hideToggle.left
+                  enabled: !profileRow.header && !profileRow.parked
+                  hoverEnabled: enabled
+                  cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
                   preventStealing: true
                   onPressed: function(mouse) {
                     mouse.accepted = true
+                    if (profileRow.header || profileRow.parked) return
                     var id = String(profileRow.modelData.key || profileRow.modelData.id || "")
                     Qt.callLater(function() { root.chooseProfile(id) })
                   }
