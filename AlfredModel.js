@@ -126,7 +126,7 @@ function effortLabel(level) {
 
 function parseModels(raw) {
   var text = String(raw || "").trim()
-  var empty = { ok: false, provider: "", current: "", models: [] }
+  var empty = { ok: false, provider: "", providerLabel: "", current: "", models: [], providers: [] }
   if (text === "") return empty
   try {
     var parsed = JSON.parse(text)
@@ -141,15 +141,84 @@ function parseModels(raw) {
         if (id !== "") list.push(id)
       }
     }
+    var providers = []
+    var rows = parsed.providers
+    if (Array.isArray(rows)) {
+      for (i = 0; i < rows.length; i++) {
+        var row = rows[i]
+        if (!row || typeof row !== "object") continue
+        var pid = String(row.id || "")
+        if (pid === "") continue
+        providers.push({
+          id: pid,
+          label: String(row.label || pid),
+          checked: row.checked === true
+        })
+      }
+    }
     return {
       ok: parsed.ok !== false,
       provider: String(parsed.provider || ""),
+      providerLabel: String(parsed.providerLabel || parsed.provider || ""),
       current: String(parsed.current || parsed.default || ""),
-      models: list
+      models: list,
+      providers: providers
     }
   } catch (e) {
     return empty
   }
+}
+
+function parsePrefs(raw) {
+  var text = String(raw || "").trim()
+  var empty = { ok: false, theme: "classic", themeLabel: "Classic", themes: [
+    { id: "classic", label: "Classic", checked: true },
+    { id: "glassy", label: "Glassy", checked: false }
+  ] }
+  if (text === "") return empty
+  try {
+    var parsed = JSON.parse(text)
+    if (!parsed || typeof parsed !== "object") return empty
+    var theme = String(parsed.theme || "classic").toLowerCase()
+    if (theme !== "glassy") theme = "classic"
+    var themes = []
+    var rows = parsed.themes
+    var i
+    if (Array.isArray(rows)) {
+      for (i = 0; i < rows.length; i++) {
+        var row = rows[i]
+        if (!row || typeof row !== "object") continue
+        var id = String(row.id || "")
+        if (id === "") continue
+        themes.push({
+          id: id,
+          label: String(row.label || id),
+          checked: row.checked === true
+        })
+      }
+    }
+    if (themes.length === 0) {
+      themes = [
+        { id: "classic", label: "Classic", checked: theme === "classic" },
+        { id: "glassy", label: "Glassy", checked: theme === "glassy" }
+      ]
+    }
+    return {
+      ok: parsed.ok !== false,
+      theme: theme,
+      themeLabel: String(parsed.themeLabel || (theme === "glassy" ? "Glassy" : "Classic")),
+      themes: themes,
+      error: String(parsed.error || "")
+    }
+  } catch (e) {
+    return empty
+  }
+}
+
+function shortProviderName(name) {
+  var value = String(name || "").trim()
+  if (value === "") return "Provider"
+  return value
 }
 
 function parseEffort(raw) {

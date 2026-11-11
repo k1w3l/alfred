@@ -49,7 +49,12 @@ Item {
   property string voicePath: ""
   property string modelName: ""
   property string modelProvider: ""
+  property string modelProviderLabel: ""
   property var modelOptions: []
+  property var providerOptions: []
+  property string uiTheme: "classic"
+  property string uiThemeLabel: "Classic"
+  property var themeOptions: []
   property string reasoningEffort: "medium"
   property var effortOptions: ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]
   property string gatewayConnectionId: "local"
@@ -531,8 +536,44 @@ Item {
   function applyModels(raw) {
     var parsed = AlfredModel.parseModels(raw)
     if (parsed.provider !== "") modelProvider = parsed.provider
+    if (parsed.providerLabel !== "") modelProviderLabel = parsed.providerLabel
+    else if (parsed.provider !== "") modelProviderLabel = parsed.provider
     if (parsed.current !== "") modelName = parsed.current
     if (parsed.models.length > 0) modelOptions = parsed.models
+    if (parsed.providers && parsed.providers.length > 0) providerOptions = parsed.providers
+  }
+
+  function setProvider(id) {
+    var value = String(id || "").trim()
+    if (value === "" || setProviderProcess.running) return false
+    modelProvider = value
+    setProviderProcess.command = ["fish", "--no-config", root.pluginDir + "/scripts/models.fish", "set-provider", value]
+    setProviderProcess.running = true
+    return true
+  }
+
+  function refreshPrefs() {
+    if (prefsProcess.running) return
+    prefsProcess.command = ["fish", "--no-config", root.pluginDir + "/scripts/prefs.fish", "get"]
+    prefsProcess.running = true
+  }
+
+  function setUiTheme(id) {
+    var value = String(id || "").trim().toLowerCase()
+    if (value !== "glassy") value = "classic"
+    if (setPrefsProcess.running) return false
+    uiTheme = value
+    uiThemeLabel = value === "glassy" ? "Glassy" : "Classic"
+    setPrefsProcess.command = ["fish", "--no-config", root.pluginDir + "/scripts/prefs.fish", "set-theme", value]
+    setPrefsProcess.running = true
+    return true
+  }
+
+  function applyPrefs(raw) {
+    var parsed = AlfredModel.parsePrefs(raw)
+    if (parsed.theme !== "") uiTheme = parsed.theme
+    if (parsed.themeLabel !== "") uiThemeLabel = parsed.themeLabel
+    if (parsed.themes && parsed.themes.length > 0) themeOptions = parsed.themes
   }
 
   function refreshEffort() {
@@ -1245,6 +1286,46 @@ Item {
   }
 
   Process {
+    id: setProviderProcess
+    running: false
+    stdout: StdioCollector {
+      id: setProviderOut
+      waitForEnd: true
+    }
+    stderr: StdioCollector { waitForEnd: true }
+    onExited: function() {
+      root.applyModels(setProviderOut.text)
+      root.refreshModels()
+    }
+  }
+
+  Process {
+    id: prefsProcess
+    running: false
+    stdout: StdioCollector {
+      id: prefsOut
+      waitForEnd: true
+    }
+    stderr: StdioCollector { waitForEnd: true }
+    onExited: function() {
+      root.applyPrefs(prefsOut.text)
+    }
+  }
+
+  Process {
+    id: setPrefsProcess
+    running: false
+    stdout: StdioCollector {
+      id: setPrefsOut
+      waitForEnd: true
+    }
+    stderr: StdioCollector { waitForEnd: true }
+    onExited: function() {
+      root.applyPrefs(setPrefsOut.text)
+    }
+  }
+
+  Process {
     id: transcribeProcess
     running: false
     stdout: StdioCollector {
@@ -1486,6 +1567,7 @@ Item {
     root.refreshModels()
     root.refreshEffort()
     root.refreshGateways()
+    root.refreshPrefs()
     root.prefetchSlash()
   }
 }

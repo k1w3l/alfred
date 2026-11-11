@@ -45,6 +45,8 @@ omarchy bar move kiwel.alfred --section right
 - The composer grows as you type (up to about eight lines, then scrolls). Enter sends, Shift+Enter adds a line.
 - The gear dropdown (labelled with the current model and effort) groups every setting:
   - **Model** switches `model.default` for the current Hermes provider.
+  - **Provider** switches `model.provider` (and a matching default model) among the cached Hermes providers.
+  - **Theme** switches the HUD between **Classic** (the original opaque pill) and **Glassy** (bar-matching frosted surfaces, brighter text, Hyprland layer blur). Stored as `uiTheme` in `~/.config/Hermes/alfred.json`.
   - **Reasoning** sets `agent.reasoning_effort` (`none` … `ultra`).
   - **Profile** lists the same faces as the pill: local profiles and the profiles of each remote gateway. Choosing one selects that gateway and that profile. A local choice also runs `hermes profile use`; a remote choice does not change the local sticky profile.
   - **Keyboard shortcuts** rebinds the global Hyprland keys and the keys inside the pill. Click a shortcut, press the new combination (Escape cancels, Backspace turns it off); the reset icon restores the default.
@@ -53,7 +55,7 @@ omarchy bar move kiwel.alfred --section right
 - Several chats can run at once, each in its own Hermes session. With more than one chat, chips next to those buttons switch or close them; a pulsing dot marks a chat that is still working.
 - While a chat is working, the eye button opens a live preview: each tool call with its target and duration, plus the reply as it streams (`hermes chat --format stream-json`). Remote gateways only report the final reply.
 - Long conversations scroll inside the thread (mouse wheel, scrollbar, or PageUp/PageDown from the composer). When you are not at the bottom, **Jump to latest** appears under the thread.
-- The microphone records a clip with `pw-record` and transcribes it into the composer.
+- With an empty composer the send slot is a ghost speech-balloon (`comment`), in the same ink as the other controls, not the white send disc. The microphone next to it is dictation. Both record a clip with `pw-record` and transcribe it into the composer.
 - Escape hides the pill when idle. While a reply is in flight, Escape shrinks to the ball so the travelling arc stays visible. Inside a submenu, Escape goes back one level.
 
 Default shortcuts (change them in the gear dropdown under **Keyboard shortcuts**):

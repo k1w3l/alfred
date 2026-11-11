@@ -15,22 +15,27 @@ from typing import Any
 import httpx
 import websockets
 
-HOME = Path(os.path.expanduser("~"))
-AUTH_PATH = HOME / ".config" / "Hermes" / "alfred-auth.json"
-STATE_PATH = HOME / ".config" / "Hermes" / "alfred.json"
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
 
-
-def load_json(path: Path, default):
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return default
+import gateways  # noqa: E402
 
 
 def auth_for(connection_id: str) -> dict:
-    data = load_json(AUTH_PATH, {})
-    entry = data.get(connection_id) if isinstance(data, dict) else None
-    return entry if isinstance(entry, dict) else {}
+    return gateways.load_auth(connection_id)
+
+
+async def pick_source(ws) -> str:
+    try:
+        desc = await rpc(ws, "runtime.describe", timeout=10)
+        sources = list(((desc or {}).get("session_create") or {}).get("sources") or [])
+    except Exception:
+        sources = []
+    for candidate in ("oneshot", "cli", "tool", "desktop"):
+        if candidate in sources:
+            return candidate
+    return sources[0] if sources else "cli"
 
 
 def ws_base(http_url: str) -> str:
@@ -199,10 +204,11 @@ async def run(url: str, connection_id: str, session_name: str, prompt: str, reas
                     created = None
             if not isinstance(created, dict) or not (created.get("session_id") or created.get("id")):
                 title = "" if session_name.startswith("id:") else session_name
+                source = await pick_source(ws)
                 created = await rpc(
                     ws,
                     "session.create",
-                    {"source": "alfred", **({"title": title} if title else {}), **scope},
+                    {"source": source, **({"title": title} if title else {}), **scope},
                     timeout=30,
                 )
             session_id = ""

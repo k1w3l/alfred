@@ -154,8 +154,9 @@ if string match -q 'id:*' -- $session
 else if test -n "$session"
   set session_args -c "$session" --create-if-missing
 end
+# Do not pass --source alfred. Hermes ≥0.22 routes chat through the gateway
+# and session.create only accepts the contract list (oneshot, cli, …).
 exec $hermes $profile_args chat --format stream-json --oneshot --accept-hooks \
   $session_args \
-  --source alfred \
   $reasoning_args \
   -q "$prompt"

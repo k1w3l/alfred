@@ -37,8 +37,10 @@ Rectangle {
   readonly property string folderPath: root.urlToPath(root.folder)
   readonly property bool folderMode: root.mode === "folder"
   readonly property bool canOpen: root.folderMode || root.selected.length > 0
-  readonly property color ink: Color.foreground
-  readonly property color dim: Color.muted
+  property color ink: Color.foreground
+  property color dim: Color.muted
+  property color surface: Util.alpha(Qt.darker(Color.background, 1.25), 0.92)
+  property int inkWeight: Font.Normal
 
   function urlToPath(value) {
     var text = String(value || "")
@@ -98,7 +100,7 @@ Rectangle {
   }
 
   radius: root.px(Theme.arcRadiusPx())
-  color: Util.alpha(Qt.darker(Color.background, 1.25), 0.92)
+  color: root.surface
   border.width: 1
   border.color: Util.alpha(Color.accent, 0.18)
 
@@ -135,6 +137,7 @@ Rectangle {
           color: root.dim
           font.family: Style.font.family
           font.pixelSize: root.fontPx(Style.font.caption)
+          font.weight: root.inkWeight
         }
         MouseArea {
           id: upHit
@@ -155,6 +158,7 @@ Rectangle {
         color: root.dim
         font.family: Style.font.family
         font.pixelSize: root.fontPx(Style.font.caption)
+        font.weight: root.inkWeight
       }
     }
 
@@ -192,6 +196,7 @@ Rectangle {
           color: fileIsDir ? Color.accent : root.ink
           font.family: Style.font.family
           font.pixelSize: root.fontPx(Style.font.caption)
+          font.weight: root.inkWeight
         }
 
         MouseArea {
@@ -234,6 +239,7 @@ Rectangle {
           color: root.canOpen ? Color.accent : root.dim
           font.family: Style.font.family
           font.pixelSize: root.fontPx(Style.font.caption)
+          font.weight: root.inkWeight
         }
         MouseArea {
           id: openHit
@@ -257,6 +263,7 @@ Rectangle {
           color: root.dim
           font.family: Style.font.family
           font.pixelSize: root.fontPx(Style.font.caption)
+          font.weight: root.inkWeight
         }
         MouseArea {
           id: cancelHit

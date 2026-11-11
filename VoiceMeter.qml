@@ -16,6 +16,8 @@ Item {
   property bool hearing: false
   property int elapsedMs: 0
   property real uiScale: 1
+  property color surface: "#141418"
+  property color ink: Color.foreground
 
   implicitWidth: 188
   implicitHeight: 36
@@ -32,7 +34,7 @@ Item {
   Rectangle {
     anchors.fill: parent
     radius: height / 2
-    color: "#141418"
+    color: root.surface
     border.width: 1
     border.color: root.hearing ? root.live : (root.capturing ? Qt.rgba(root.live.r, root.live.g, root.live.b, 0.45) : Qt.rgba(1, 1, 1, 0.14))
   }
@@ -64,7 +66,7 @@ Item {
     anchors.verticalCenter: parent.verticalCenter
     text: root.statusText
     elide: Text.ElideRight
-    color: root.hearing ? root.live : Color.foreground
+    color: root.hearing ? root.live : root.ink
     font.family: Style.font.family
     font.pixelSize: Math.round(Style.font.caption * root.uiScale)
   }
@@ -75,7 +77,7 @@ Item {
     anchors.rightMargin: 10
     anchors.verticalCenter: parent.verticalCenter
     text: root.clockText
-    color: Color.foreground
+    color: root.ink
     font.family: Style.font.family
     font.pixelSize: Math.round(Style.font.caption * root.uiScale)
   }

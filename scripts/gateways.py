@@ -12,6 +12,7 @@ from pathlib import Path
 
 HOME = Path(os.path.expanduser("~"))
 STATE_PATH = HOME / ".config" / "Hermes" / "alfred.json"
+AUTH_PATH = HOME / ".config" / "Hermes" / "alfred-auth.json"
 CONNECTIONS_CANDIDATES = [
     HOME / ".config" / "Hermes" / "connections.json",
     HOME / ".config" / "hermes-desktop" / "connections.json",
@@ -29,6 +30,33 @@ def load_json(path: Path, default):
 def save_json(path: Path, data) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+
+
+def _usable_auth(entry: dict) -> bool:
+    token = str(entry.get("token") or "").strip()
+    user = str(entry.get("username") or entry.get("user") or "").strip()
+    password = str(entry.get("password") or "").strip()
+    return bool(token or (user and password))
+
+
+def load_auth(connection_id: str = "") -> dict:
+    """Credentials for a Desktop connection id.
+
+    Desktop can rename a saved gateway (``jarvis`` → ``hermes-remote``) without
+    rewriting alfred-auth.json. If the exact key is missing and only one login
+    is stored, reuse that login.
+    """
+    data = load_json(AUTH_PATH, {})
+    if not isinstance(data, dict):
+        return {}
+    cid = str(connection_id or "").strip()
+    exact = data.get(cid)
+    if isinstance(exact, dict) and _usable_auth(exact):
+        return exact
+    usable = [row for row in data.values() if isinstance(row, dict) and _usable_auth(row)]
+    if len(usable) == 1:
+        return usable[0]
+    return {}
 
 
 def find_connections_path() -> Path | None:

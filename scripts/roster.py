@@ -26,7 +26,6 @@ sys.dont_write_bytecode = True
 
 HOME = Path(os.path.expanduser("~"))
 STATE_PATH = HOME / ".config" / "Hermes" / "alfred.json"
-AUTH_PATH = HOME / ".config" / "Hermes" / "alfred-auth.json"
 RUNTIME = Path(os.environ.get("XDG_RUNTIME_DIR") or "/tmp")
 CACHE_PATH = RUNTIME / "alfred-roster-cache.json"
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -73,9 +72,7 @@ def save_state(data: dict) -> None:
 
 
 def load_auth(connection_id: str) -> dict:
-    data = local_profiles.load_json(AUTH_PATH, {})
-    entry = data.get(connection_id) if isinstance(data, dict) else None
-    return entry if isinstance(entry, dict) else {}
+    return gateways.load_auth(connection_id)
 
 
 def pretty_name(profile_id: str, display: str) -> str:
@@ -131,9 +128,28 @@ def face_from(shape: str, fill: str, expression: str, idle: int, key: str) -> di
     }
 
 
+def sibling_keys(key: str) -> list[str]:
+    """Desktop may rename a gateway id; keep hide/face keys working across that."""
+    gid, sep, pid = str(key or "").partition(":")
+    if not sep:
+        return [str(key or "")]
+    aliases = {"jarvis": "hermes-remote", "hermes-remote": "jarvis"}
+    keys = [f"{gid}:{pid}"]
+    other = aliases.get(gid)
+    if other:
+        keys.append(f"{other}:{pid}")
+    return keys
+
+
 def emoji_for(gateway_id: str, profile_id: str, label: str, overrides: dict) -> dict:
     key = f"{gateway_id}:{profile_id}"
-    custom = overrides.get(key) if isinstance(overrides, dict) else None
+    custom = None
+    if isinstance(overrides, dict):
+        for candidate in sibling_keys(key):
+            row = overrides.get(candidate)
+            if isinstance(row, dict) and row.get("shape") and row.get("fill"):
+                custom = row
+                break
     if isinstance(custom, dict) and custom.get("shape") and custom.get("fill"):
         expression = str(custom.get("expression") or EYES_ALIAS.get(str(custom.get("eyes") or ""), "neutre"))
         idle = parse_idle(custom.get("idle"), digest_of(key))
@@ -324,7 +340,9 @@ def hidden_keys(state: dict) -> list[str]:
 
 
 def mark_hidden(rows: list[dict], state: dict) -> None:
-    hidden = set(hidden_keys(state))
+    hidden = set()
+    for key in hidden_keys(state):
+        hidden.update(sibling_keys(key))
     for row in rows:
         row["hidden"] = row["key"] in hidden
 

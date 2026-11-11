@@ -78,6 +78,7 @@ function glyph(name) {
     "chevron-right": "\uEAB6",
     "eye": "\uEA70",
     "eye-closed": "\uEAE7",
+    "comment": "\uEA6B",
     "comment-discussion": "\uEAC7",
     "tools": "\uEB6D",
     "terminal": "\uEA85",
@@ -92,7 +93,8 @@ function glyph(name) {
     "keyboard": "\uEA65",
     "clear-all": "\uEABF",
     "file-pdf": "\uEAEB",
-    "file-zip": "\uEAEF"
+    "file-zip": "\uEAEF",
+    "symbol-color": "\uEB5D"
   }
   return map[String(name || "")] || ""
 }
@@ -107,4 +109,8 @@ function moodYellow() {
 
 function moodGreen() {
   return "#3dd68c"
+}
+
+function themeLabel(id) {
+  return String(id || "") === "glassy" ? "Glassy" : "Classic"
 }

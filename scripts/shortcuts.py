@@ -105,6 +105,17 @@ def write_hypr(state: dict) -> None:
             continue
         lines.append(f"hl.unbind({lua_string(keys)})")
         lines.append(f"o.bind({lua_string(keys)}, {lua_string('Alfred: ' + row['label'])}, {lua_string(row['command'])})")
+    theme = str(state.get("uiTheme") or "classic").strip().lower()
+    if theme in ("glass", "glassy", "frosted"):
+        lines.extend([
+            "",
+            "-- Glassy HUD: same compositor blur as the Omarchy bar and glassy windows.",
+            "hl.layer_rule({",
+            '  match = { namespace = "^kiwel-alfred$" },',
+            "  blur = true,",
+            "  ignore_alpha = 0.3,",
+            "})",
+        ])
     HYPR_DIR.mkdir(parents=True, exist_ok=True)
     HYPR_FILE.write_text("\n".join(lines) + "\n", encoding="utf-8")
 

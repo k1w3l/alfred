@@ -17,7 +17,9 @@ Item {
   layer.enabled: width > 2 && height > 2
   layer.textureSize: Qt.size(Math.ceil(width * root.supersample), Math.ceil(height * root.supersample))
   layer.smooth: true
-  layer.mipmap: true
+  // Mipmaps blur the cream rim when the 6× pass is scaled back. Bilinear
+  // from the full-size FBO keeps the stroke a hard line.
+  layer.mipmap: false
 
   property string agentId: ""
   property string slot: "face"
@@ -38,7 +40,7 @@ Item {
   property string flow: ""
   // Editor draft and swatches. The pose stays on the idle face at clock 0.
   property bool still: false
-  property real supersample: 5
+  property real supersample: 6
 
   readonly property string playerId: (agentId !== "" ? agentId : shape + fill) + "/" + slot
   readonly property real unit: Math.min(width, height) / 316
@@ -60,14 +62,12 @@ Item {
     if (root.mood === "error" || root.mood === "listening") return "#ffd0d1"
     return "#ffffff"
   }
-  // Screen pixels. About a fifth under the previous 1.7 / 1.45 / 1.2.
-  // Below 36px the factor falls with width (26px → width/45, 16px sits on
-  // the 0.54 floor) so the chips and the tray lose a little more than the
-  // large face. The floor keeps the stroke visible. The traveling segment
-  // sits on that rim.
+  // Screen pixels. Idle sits just over a device pixel so the cream edge
+  // reads as a line, not a haze. Chips and the tray keep a 1px floor; the
+  // traveling segment rides the same width.
   readonly property real rimPx: {
-    var base = root.voice ? 1.36 : (root.marching ? 1.16 : 0.96)
-    if (root.width < 36) return base * Math.max(0.54, root.width / 45)
+    var base = root.voice ? 1.85 : (root.marching ? 1.65 : 1.5)
+    if (root.width < 36) return Math.max(1.0, base * root.width / 40)
     return base
   }
   readonly property real rimStroke: root.rimPx / Math.max(root.unit, 0.02)
@@ -86,7 +86,7 @@ Item {
   // else. That fallback is the theme surface, not a sample of the wallpaper.
   property int groundTick: 0
   readonly property color themeTray: Color.bar.background
-  readonly property color themeSheet: Qt.darker(Color.background, 1.45)
+  property color themeSheet: Qt.darker(Color.background, 1.45)
   readonly property color windowPaint: root.readWindowColor()
   readonly property color ground: {
     var _tick = root.groundTick
@@ -103,7 +103,7 @@ Item {
   readonly property var shadowWeightsOnDark: [0.42, 0.30, 0.22, 0.16, 0.11, 0.07, 0.045, 0.028]
   readonly property var shadowWeights: root.groundLight ? root.shadowWeightsOnLight : root.shadowWeightsOnDark
   readonly property real shadowReach: root.width < 22 ? 2.85 : (root.width < 36 ? 3.4 : 5.0)
-  readonly property real haloPx: root.width < 36 ? 0.7 : 1.05
+  readonly property real haloPx: root.width < 36 ? 0.4 : 0.55
   readonly property real haloStroke: root.haloPx / Math.max(root.unit, 0.02)
   readonly property real bodyLoop: Math.max(8, (root.frame.span || 620) / Math.max(root.marchStroke, 0.5))
   property real march: 0

@@ -208,6 +208,13 @@ Item {
   readonly property string lastOutcome: alfred ? String(alfred.lastOutcome || "") : ""
   readonly property string modelName: alfred ? String(alfred.modelName || "") : ""
   readonly property var modelOptions: alfred && alfred.modelOptions ? alfred.modelOptions : []
+  readonly property string modelProvider: alfred ? String(alfred.modelProvider || "") : ""
+  readonly property string modelProviderLabel: alfred ? String(alfred.modelProviderLabel || alfred.modelProvider || "") : ""
+  readonly property var providerOptions: alfred && alfred.providerOptions ? alfred.providerOptions : []
+  readonly property string uiTheme: alfred ? String(alfred.uiTheme || "classic") : "classic"
+  readonly property string uiThemeLabel: alfred ? String(alfred.uiThemeLabel || "") : "Classic"
+  readonly property var themeOptions: alfred && alfred.themeOptions ? alfred.themeOptions : []
+  readonly property bool glassy: root.uiTheme === "glassy"
   readonly property string reasoningEffort: alfred ? String(alfred.reasoningEffort || "medium") : "medium"
   readonly property var effortOptions: alfred && alfred.effortOptions ? alfred.effortOptions : ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]
   readonly property string gatewayLabel: alfred ? String(alfred.gatewayLabel || "This device") : "This device"
@@ -343,14 +350,26 @@ Item {
     return Color.accent
   }
 
-  readonly property color foreground: Color.foreground
-  readonly property color dim: Color.muted
-  readonly property color surface: Util.alpha(Qt.darker(Color.background, 1.45), 0.94)
-  readonly property color sheet: Util.alpha(Qt.darker(Color.background, 1.25), 0.92)
+  readonly property color foreground: root.glassy ? Qt.rgba(1, 1, 1, 0.98) : Color.foreground
+  readonly property color dim: root.glassy ? Qt.rgba(1, 1, 1, 0.84) : Color.muted
+  readonly property color glassFill: {
+    var c = Color.bar.background
+    return Qt.rgba(c.r, c.g, c.b, Math.min(c.a, 0.35))
+  }
+  readonly property color glassSheet: {
+    var c = Color.bar.background
+    return Qt.rgba(c.r, c.g, c.b, 0.42)
+  }
+  readonly property color surface: root.glassy ? root.glassFill : Util.alpha(Qt.darker(Color.background, 1.45), 0.94)
+  readonly property color sheet: root.glassy ? root.glassSheet : Util.alpha(Qt.darker(Color.background, 1.25), 0.92)
   readonly property color rim: {
-    if (root.mood === "idle") return Util.alpha(Color.accent, root.focused ? 0.55 : 0.28)
+    if (root.mood === "idle")
+      return root.glassy
+        ? Qt.rgba(1, 1, 1, root.focused ? 0.28 : 0.16)
+        : Util.alpha(Color.accent, root.focused ? 0.55 : 0.28)
     return root.moodColor
   }
+  readonly property int inkWeight: root.glassy ? Font.DemiBold : Font.Normal
   readonly property string fontFamily: Style.font.family
   // Pill scale follows the Hyprland output scale of activeScreen.
   // Screen.width/height are logical (DP-3 is 2560x1440) and devicePixelRatio
@@ -517,7 +536,9 @@ Item {
       voice: "VOICE",
       settings: "ALFRED",
       model: root.modelOptions.length === 0 ? "NO CACHED MODELS" : "MODEL",
+      provider: "PROVIDER",
       effort: "REASONING",
+      theme: "THEME",
       profile: "PROFILE",
       face: root.faceLabel !== "" ? root.faceLabel : "FACE",
       gateway: "GATEWAY",
@@ -533,7 +554,8 @@ Item {
 
   function refreshMenuSource(kind) {
     if (!alfred) return
-    if (kind === "model" && typeof alfred.refreshModels === "function") alfred.refreshModels()
+    if ((kind === "model" || kind === "provider") && typeof alfred.refreshModels === "function") alfred.refreshModels()
+    if (kind === "theme" && typeof alfred.refreshPrefs === "function") alfred.refreshPrefs()
     if (kind === "effort" && typeof alfred.refreshEffort === "function") alfred.refreshEffort()
     if (kind === "gateway" && typeof alfred.refreshGateways === "function") alfred.refreshGateways()
     if (kind === "profile" && typeof alfred.refreshProfiles === "function") alfred.refreshProfiles()
@@ -839,13 +861,15 @@ Item {
       ]
     } else if (root.menuKind === "voice") {
       rows = [
-        { id: "conversation", icon: "audio-lines", label: "Start voice conversation", checked: false },
+        { id: "conversation", icon: "comment", label: "Start voice conversation", checked: false },
         { id: "dictate", icon: "mic", label: root.listening ? "Stop dictation" : "Voice dictation", checked: root.listening }
       ]
     } else if (root.menuKind === "settings") {
       rows = [
         { id: "model", icon: "pulse", label: "Model", value: AlfredModel.shortModelName(root.modelName), sub: true },
+        { id: "provider", icon: "plug", label: "Provider", value: root.modelProviderLabel || root.modelProvider, sub: true },
         { id: "effort", icon: "lightbulb", label: "Reasoning", value: AlfredModel.effortLabel(root.reasoningEffort), sub: true },
+        { id: "theme", icon: "symbol-color", label: "Theme", value: root.uiThemeLabel || Theme.themeLabel(root.uiTheme), sub: true },
         { id: "profile", icon: "account", label: "Profile", value: root.profileLabel, sub: true },
         { id: "gateway", icon: root.gatewayKind === "local" ? "server" : "plug", label: "Gateway", value: root.gatewayLabel, sub: true },
         { id: "shortcuts", icon: "keyboard", label: "Keyboard shortcuts", value: "", sub: true }
@@ -864,6 +888,29 @@ Item {
           icon: "",
           label: String(root.modelOptions[i]),
           checked: String(root.modelOptions[i]) === root.modelName
+        })
+      }
+    } else if (root.menuKind === "provider") {
+      for (i = 0; i < root.providerOptions.length; i++) {
+        var pv = root.providerOptions[i]
+        rows.push({
+          id: String(pv.id || ""),
+          icon: "plug",
+          label: String(pv.label || pv.id || ""),
+          checked: String(pv.id || "") === root.modelProvider
+        })
+      }
+    } else if (root.menuKind === "theme") {
+      var themes = root.themeOptions.length > 0 ? root.themeOptions : [
+        { id: "classic", label: "Classic" },
+        { id: "glassy", label: "Glassy" }
+      ]
+      for (i = 0; i < themes.length; i++) {
+        rows.push({
+          id: String(themes[i].id || ""),
+          icon: String(themes[i].id) === "glassy" ? "symbol-color" : "settings-gear",
+          label: String(themes[i].label || themes[i].id || ""),
+          checked: String(themes[i].id || "") === root.uiTheme
         })
       }
     } else if (root.menuKind === "effort") {
@@ -926,6 +973,8 @@ Item {
       return
     }
     if (root.menuKind === "model") root.chooseModel(id)
+    if (root.menuKind === "provider") root.chooseProvider(id)
+    if (root.menuKind === "theme") root.chooseTheme(id)
     if (root.menuKind === "effort") root.chooseEffort(id)
     if (root.menuKind === "gateway") root.chooseGateway(id)
     if (root.menuKind === "profile") root.chooseProfile(id)
@@ -957,6 +1006,16 @@ Item {
   function chooseModel(name) {
     root.closeMenus()
     if (alfred && typeof alfred.setModel === "function") alfred.setModel(name)
+  }
+
+  function chooseProvider(id) {
+    root.closeMenus()
+    if (alfred && typeof alfred.setProvider === "function") alfred.setProvider(id)
+  }
+
+  function chooseTheme(id) {
+    root.closeMenus()
+    if (alfred && typeof alfred.setUiTheme === "function") alfred.setUiTheme(id)
   }
 
   function chooseEffort(level) {
@@ -1162,6 +1221,30 @@ Item {
 
   onModelNameChanged: {
     if (root.menuKind === "model" || root.menuKind === "settings") root.rebuildMenu()
+  }
+
+  onProviderOptionsChanged: {
+    if (root.menuKind === "provider") root.rebuildMenu()
+  }
+
+  onModelProviderChanged: {
+    if (root.menuKind === "provider" || root.menuKind === "settings") root.rebuildMenu()
+  }
+
+  onModelProviderLabelChanged: {
+    if (root.menuKind === "settings") root.rebuildMenu()
+  }
+
+  onThemeOptionsChanged: {
+    if (root.menuKind === "theme") root.rebuildMenu()
+  }
+
+  onUiThemeChanged: {
+    if (root.menuKind === "theme" || root.menuKind === "settings") root.rebuildMenu()
+  }
+
+  onUiThemeLabelChanged: {
+    if (root.menuKind === "settings") root.rebuildMenu()
   }
 
   onEffortOptionsChanged: {
@@ -1446,6 +1529,7 @@ Item {
           anchors.centerIn: parent
           width: root.ballFace
           height: root.ballFace
+          themeSheet: root.surface
           agentId: root.profileKey
           slot: "ball"
           shape: root.profileShape
@@ -1506,6 +1590,7 @@ Item {
 
             HudButton {
               uiScale: root.uiScale
+              glassy: root.glassy
 
               icon: "add"
               Layout.alignment: root.rowAlign
@@ -1533,11 +1618,13 @@ Item {
                 wrapMode: TextEdit.Wrap
                 color: root.foreground
                 selectionColor: Color.accent
-                selectedTextColor: Color.background
+                selectedTextColor: root.glassy ? root.foreground : Color.background
                 placeholderText: root.busy ? (root.profileLabel + " is working…") : (root.transcribing ? "Transcribing…" : (root.listening ? "Listening…" : (root.gatewayActive ? ("Ask " + root.profileLabel) : "Gateway down")))
                 placeholderTextColor: root.dim
                 font.family: root.fontFamily
                 font.pixelSize: root.fontPx(Style.font.body)
+                font.weight: root.inkWeight
+                font.hintingPreference: Font.PreferFullHinting
                 background: Item {}
                 leftPadding: root.px(4)
                 rightPadding: root.px(4)
@@ -1649,6 +1736,7 @@ Item {
 
             HudButton {
               uiScale: root.uiScale
+              glassy: root.glassy
 
               visible: root.busy
               icon: root.previewOpen ? "eye-closed" : "eye"
@@ -1660,6 +1748,7 @@ Item {
 
             HudButton {
               uiScale: root.uiScale
+              glassy: root.glassy
 
               wide: true
               Layout.alignment: root.rowAlign
@@ -1667,12 +1756,13 @@ Item {
               trailingIcon: "chevron-down"
               label: root.settingsSummary()
               opened: root.menuKind === "settings" || root.menuParent === "settings"
-              tooltipText: "Model, reasoning, profile, gateway and sessions"
+              tooltipText: "Model, provider, theme, reasoning, profile, gateway and sessions"
               onClicked: root.toggleSettings()
             }
 
             HudButton {
               uiScale: root.uiScale
+              glassy: root.glassy
 
               icon: root.listening ? "stop" : "mic"
               Layout.alignment: root.rowAlign
@@ -1683,10 +1773,11 @@ Item {
 
             HudButton {
               uiScale: root.uiScale
+              glassy: root.glassy
 
-              primary: true
+              primary: !root.showVoicePrimary
               Layout.alignment: root.rowAlign
-              icon: root.showVoicePrimary ? "audio-lines" : (root.showStop ? "stop" : "arrow-up")
+              icon: root.showVoicePrimary ? "comment" : (root.showStop ? "stop" : "arrow-up")
               enabled: root.showVoicePrimary || root.showStop || root.hasPayload
               tooltipText: root.showVoicePrimary ? "Start voice conversation" : (root.showStop ? "Stop" : "Send")
               onClicked: root.handlePrimary()
@@ -1694,6 +1785,7 @@ Item {
 
             HudButton {
               uiScale: root.uiScale
+              glassy: root.glassy
 
               icon: "screen-normal"
               Layout.alignment: root.rowAlign
@@ -2005,6 +2097,8 @@ Item {
             width: root.px(188)
             height: parent.height
             uiScale: root.uiScale
+            surface: root.glassy ? root.surface : "#141418"
+            ink: root.foreground
             level: alfred ? alfred.audioLevel : 0
             capturing: alfred ? alfred.voiceCapturing : false
             hearing: alfred ? alfred.voiceHearing : false
@@ -2184,6 +2278,7 @@ Item {
                     font.family: menuCodicon.name !== "" ? menuCodicon.name : "codicon"
                     font.pixelSize: root.px(Theme.iconPx())
                     anchors.verticalCenter: parent.verticalCenter
+                    font.weight: root.inkWeight
                   }
 
                   Text {
@@ -2193,6 +2288,7 @@ Item {
                     font.family: root.fontFamily
                     font.pixelSize: root.fontPx(Style.font.caption)
                     anchors.verticalCenter: parent.verticalCenter
+                    font.weight: root.inkWeight
                   }
                 }
 
@@ -2508,6 +2604,57 @@ Item {
             }
 
             Repeater {
+              model: root.menuKind === "voice" ? root.menuRows : 0
+
+              Rectangle {
+                required property var modelData
+                width: menuCol.width
+                height: root.px(30)
+                radius: root.px(6)
+                color: voiceItemHit.containsMouse ? Util.alpha(Color.foreground, 0.10) : "transparent"
+
+                Row {
+                  anchors.fill: parent
+                  anchors.leftMargin: root.px(8)
+                  anchors.rightMargin: root.px(8)
+                  spacing: root.px(8)
+
+                  Text {
+                    textFormat: Text.PlainText
+                    text: Theme.glyph(String(modelData.icon || "mic"))
+                    color: String(modelData.tint || "") === "red" ? Theme.moodRed() : root.dim
+                    font.family: menuCodicon.name !== "" ? menuCodicon.name : "codicon"
+                    font.pixelSize: root.px(Theme.iconPx())
+                    anchors.verticalCenter: parent.verticalCenter
+                  }
+
+                  Text {
+                    textFormat: Text.PlainText
+                    text: String(modelData.label || "")
+                    color: root.foreground
+                    font.family: root.fontFamily
+                    font.pixelSize: root.fontPx(Style.font.caption)
+                    font.weight: root.inkWeight
+                    anchors.verticalCenter: parent.verticalCenter
+                  }
+                }
+
+                MouseArea {
+                  id: voiceItemHit
+                  anchors.fill: parent
+                  hoverEnabled: true
+                  cursorShape: Qt.PointingHandCursor
+                  preventStealing: true
+                  onPressed: function(mouse) {
+                    mouse.accepted = true
+                    var row = modelData
+                    Qt.callLater(function() { root.activateMenuItem(row) })
+                  }
+                }
+              }
+            }
+
+            Repeater {
               model: root.menuKind === "model" ? root.modelOptions : 0
 
               Rectangle {
@@ -2543,6 +2690,90 @@ Item {
                     mouse.accepted = true
                     var name = String(modelData)
                     Qt.callLater(function() { root.chooseModel(name) })
+                  }
+                }
+              }
+            }
+
+            Repeater {
+              model: root.menuKind === "provider" ? root.providerOptions : 0
+
+              Rectangle {
+                required property var modelData
+                width: menuCol.width
+                height: root.px(28)
+                radius: root.px(6)
+                color: String(modelData.id) === root.modelProvider
+                  ? Util.alpha(Color.accent, 0.18)
+                  : (providerHit.containsMouse ? Util.alpha(Color.foreground, 0.08) : "transparent")
+
+                Text {
+                  anchors.verticalCenter: parent.verticalCenter
+                  anchors.left: parent.left
+                  anchors.leftMargin: root.px(8)
+                  anchors.right: parent.right
+                  anchors.rightMargin: root.px(8)
+                  textFormat: Text.PlainText
+                  text: String(modelData.label || modelData.id || "")
+                  elide: Text.ElideRight
+                  color: String(modelData.id) === root.modelProvider ? Color.accent : root.foreground
+                  font.family: root.fontFamily
+                  font.pixelSize: root.fontPx(Style.font.caption)
+                  font.weight: root.inkWeight
+                }
+
+                MouseArea {
+                  id: providerHit
+                  anchors.fill: parent
+                  hoverEnabled: true
+                  cursorShape: Qt.PointingHandCursor
+                  preventStealing: true
+                  onPressed: function(mouse) {
+                    mouse.accepted = true
+                    var id = String(modelData.id || "")
+                    Qt.callLater(function() { root.chooseProvider(id) })
+                  }
+                }
+              }
+            }
+
+            Repeater {
+              model: root.menuKind === "theme" ? (root.themeOptions.length > 0 ? root.themeOptions : [{ id: "classic", label: "Classic" }, { id: "glassy", label: "Glassy" }]) : 0
+
+              Rectangle {
+                required property var modelData
+                width: menuCol.width
+                height: root.px(28)
+                radius: root.px(6)
+                color: String(modelData.id) === root.uiTheme
+                  ? Util.alpha(Color.accent, 0.18)
+                  : (themeHit.containsMouse ? Util.alpha(Color.foreground, 0.08) : "transparent")
+
+                Text {
+                  anchors.verticalCenter: parent.verticalCenter
+                  anchors.left: parent.left
+                  anchors.leftMargin: root.px(8)
+                  anchors.right: parent.right
+                  anchors.rightMargin: root.px(8)
+                  textFormat: Text.PlainText
+                  text: String(modelData.label || modelData.id || "")
+                  elide: Text.ElideRight
+                  color: String(modelData.id) === root.uiTheme ? Color.accent : root.foreground
+                  font.family: root.fontFamily
+                  font.pixelSize: root.fontPx(Style.font.caption)
+                  font.weight: root.inkWeight
+                }
+
+                MouseArea {
+                  id: themeHit
+                  anchors.fill: parent
+                  hoverEnabled: true
+                  cursorShape: Qt.PointingHandCursor
+                  preventStealing: true
+                  onPressed: function(mouse) {
+                    mouse.accepted = true
+                    var id = String(modelData.id || "")
+                    Qt.callLater(function() { root.chooseTheme(id) })
                   }
                 }
               }
@@ -3214,6 +3445,10 @@ Item {
 
         FilePicker {
           uiScale: root.uiScale
+          ink: root.foreground
+          dim: root.dim
+          surface: root.sheet
+          inkWeight: root.inkWeight
 
           anchors.fill: parent
           anchors.topMargin: root.px(6)
@@ -3634,11 +3869,13 @@ Item {
                     persistentSelection: true
                     wrapMode: TextEdit.Wrap
                     color: root.foreground
-                    selectedTextColor: Color.background
+                    selectedTextColor: root.glassy ? root.foreground : Color.background
                     selectionColor: Color.accent
                     text: modelData.text || ""
                     font.family: root.fontFamily
                     font.pixelSize: root.fontPx(Style.font.body)
+                    font.weight: root.inkWeight
+                    font.hintingPreference: Font.PreferFullHinting
                     textFormat: TextEdit.PlainText
                     activeFocusOnPress: true
                     Keys.onPressed: function(event) {

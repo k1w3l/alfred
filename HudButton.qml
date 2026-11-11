@@ -34,6 +34,8 @@ Rectangle {
   property bool opened: false
   property bool wide: false
   property bool compact: false
+  property bool glassy: false
+  property bool voiceAccent: false
   property int badge: 0
 
   signal clicked()
@@ -44,11 +46,12 @@ Rectangle {
   readonly property int glyphPx: root.px(Theme.iconPx())
   readonly property bool hot: hit.containsMouse && root.enabled
   readonly property color ink: {
+    if (root.voiceAccent) return Theme.moodRed()
     if (!root.enabled && root.primary) return Util.alpha(Color.background, 0.9)
     if (root.primary) return Color.background
     if (root.active) return Color.accent
-    if (root.hot || root.opened) return Color.foreground
-    return Color.muted
+    if (root.hot || root.opened) return root.glassy ? Qt.rgba(1, 1, 1, 0.98) : Color.foreground
+    return root.glassy ? Qt.rgba(1, 1, 1, 0.84) : Color.muted
   }
   readonly property color fill: {
     if (root.primary) {
@@ -98,29 +101,6 @@ Rectangle {
     anchors.centerIn: parent
     spacing: root.px(4)
 
-    Item {
-      visible: root.icon === "audio-lines"
-      width: root.glyphPx
-      height: root.glyphPx
-      anchors.verticalCenter: parent.verticalCenter
-
-      Row {
-        anchors.centerIn: parent
-        spacing: Math.max(1, Math.round(root.glyphPx * 0.12))
-        Repeater {
-          model: 4
-          Rectangle {
-            required property int index
-            width: Math.max(1.5, root.glyphPx * 0.12)
-            height: root.glyphPx * (index === 1 || index === 2 ? 0.92 : 0.55)
-            radius: width / 2
-            color: root.ink
-            anchors.verticalCenter: parent.verticalCenter
-          }
-        }
-      }
-    }
-
     Rectangle {
       visible: root.icon === "stop"
       width: root.px(Theme.stopPx())
@@ -131,12 +111,13 @@ Rectangle {
     }
 
     Text {
-      visible: root.icon !== "" && root.icon !== "audio-lines" && root.icon !== "stop"
+      visible: root.icon !== "" && root.icon !== "stop"
       textFormat: Text.PlainText
       text: Theme.glyph(root.icon)
       color: root.ink
       font.family: codiconFont.name !== "" ? codiconFont.name : "codicon"
       font.pixelSize: root.glyphPx
+      font.weight: root.glassy ? Font.DemiBold : Font.Normal
       anchors.verticalCenter: parent.verticalCenter
     }
 
@@ -147,6 +128,7 @@ Rectangle {
       color: root.ink
       font.family: Style.font.family
       font.pixelSize: root.fontPx(Style.font.caption)
+      font.weight: root.glassy ? Font.DemiBold : Font.Normal
       elide: Text.ElideRight
       width: Math.min(implicitWidth, root.px(Theme.modelMaxPx()) - root.glyphPx - root.px(20))
       anchors.verticalCenter: parent.verticalCenter
