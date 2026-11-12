@@ -46,6 +46,12 @@ Item {
   property string lastReply: ""
   property bool hudOpen: false
   property bool hudFocused: false
+  // Last published icon rect, virtual-desktop pixels. The bar widget writes
+  // the same numbers to alfred-tray.json because a replacement bar cannot
+  // see this service.
+  property real trayX: -1
+  property real trayY: -1
+  property real trayS: 0
   property string voicePath: ""
   property string modelName: ""
   property string modelProvider: ""
@@ -774,7 +780,8 @@ Item {
       idle: root.profileIdle,
       phase: root.profilePhase,
       eyes: root.profileEyes,
-      mood: mood
+      mood: mood,
+      hudOpen: root.hudOpen === true
     })
     if (payload === root.faceSig) return
     root.faceSig = payload
@@ -1552,6 +1559,7 @@ Item {
     printErrors: false
   }
 
+  onHudOpenChanged: root.publishFace()
   onBusyChanged: root.publishFace()
   onListeningChanged: root.publishFace()
   onAwaitingPermissionChanged: root.publishFace()

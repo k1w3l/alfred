@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Controls as QQC
 import QtQuick.Layouts
 import Quickshell
+import Quickshell.Io
 import Quickshell.Wayland
 import Quickshell.Hyprland
 import qs.Commons
@@ -192,6 +193,19 @@ Item {
 
   property bool opened: false
   property bool focused: false
+  // 0 = compact ball, 1 = the face sitting in the pill's agent row.
+  property real dock: 0
+  // 0 = the face is in the pill, 1 = it has travelled to the bar icon.
+  property real travel: 0
+  property bool departing: false
+  // Exclusive only for the first frames after open, then OnDemand so the
+  // rest of the desktop can take the pointer and the keyboard.
+  property bool focusPrimed: false
+  property Item leadChip: null
+  property real trayX: -1
+  property real trayY: -1
+  property real trayS: 0
+  property real heroOpacity: 1
 
   readonly property var alfred: service ? service : (shell && typeof shell.serviceFor === "function" ? shell.serviceFor("kiwel.alfred") : null)
   readonly property bool busy: alfred ? alfred.busy === true : false
@@ -465,43 +479,181 @@ Item {
     else root.focusHud()
   }
 
-  function hideHud() {
+  function noteTray(x, y, s) {
+    if (!(s > 2) || !isFinite(x) || !isFinite(y)) return
+    root.trayX = x
+    root.trayY = y
+    root.trayS = s
+  }
+
+  function ballTopLeft(span) {
+    var c = pill.mapToItem(escScope, pill.width / 2, pill.height / 2)
+    return Qt.point(c.x - span / 2, c.y - span / 2)
+  }
+
+  function chipTopLeft() {
+    if (root.leadChip && root.leadChip.width > 2 && root.dock > 0.35) {
+      return root.leadChip.mapToItem(escScope, 0, 0)
+    }
+    var origin = pill.mapToItem(escScope, 0, 0)
+    var index = 0
+    var rows = root.visibleRoster || []
+    var i
+    for (i = 0; i < rows.length; i++) {
+      var key = String(rows[i].key || rows[i].id || "")
+      if (key === root.profileKey) {
+        index = i
+        break
+      }
+    }
+    var rowY = root.surfacePadY + Math.max(root.composerTextHeight, root.agentSize) + root.controlGap
+    var scroll = agentFlick ? agentFlick.contentX : 0
+    return Qt.point(
+      origin.x + root.surfacePadX + index * (root.agentSize + root.controlGap) - scroll,
+      origin.y + rowY
+    )
+  }
+
+  function trayTopLeft() {
+    var x = root.trayX
+    var y = root.trayY
+    var s = root.trayS
+    if (alfred && alfred.trayS > 2) {
+      x = alfred.trayX
+      y = alfred.trayY
+      s = alfred.trayS
+    }
+    if (!(s > 2) || typeof escScope.mapFromGlobal !== "function") {
+      var above = pill.mapToItem(escScope, pill.width / 2, 0)
+      var fallback = root.agentSize
+      return { x: above.x - fallback / 2, y: Math.max(2, above.y - fallback - 8), s: fallback }
+    }
+    var p = escScope.mapFromGlobal(x, y)
+    return { x: p.x, y: p.y, s: s }
+  }
+
+  function placeHero() {
+    if (!root.opened || pill.width < 2) return
+    var d = Math.max(0, Math.min(1, root.dock))
+    var t = Math.max(0, Math.min(1, root.travel))
+    var ballSize = root.ballFace
+    if (d < 0.001 && t < 0.001) {
+      var inner = Math.min(pill.width, pill.height) - root.ballPad * 2
+      if (inner > 2) ballSize = inner
+    }
+    var ball = root.ballTopLeft(ballSize)
+    var chip = root.chipTopLeft()
+    var tray = root.trayTopLeft()
+    var size = (ballSize * (1 - d) + root.agentSize * d) * (1 - t) + tray.s * t
+    hero.x = (ball.x * (1 - d) + chip.x * d) * (1 - t) + tray.x * t
+    hero.y = (ball.y * (1 - d) + chip.y * d) * (1 - t) + tray.y * t
+    hero.width = size
+    hero.height = size
+  }
+
+  function releaseKeyboard() {
     grabFocusTimer.stop()
+    focusPrimeTimer.stop()
+    root.focusPrimed = false
+    if (composerInput) composerInput.focus = false
+  }
+
+  function hideHud() {
+    root.releaseKeyboard()
     root.closeMenus()
     root.closePicker()
     root.closeSlash()
     if (alfred && alfred.listening && typeof alfred.cancelVoice === "function") alfred.cancelVoice()
     root.focused = false
-    root.opened = false
-    root.hudScreenName = ""
-    if (composerInput) composerInput.focus = false
+    if (alfred) alfred.hudFocused = false
+    if (!root.opened) {
+      root.departing = false
+      root.travel = 0
+      root.dock = 0
+      if (alfred) alfred.hudOpen = false
+      return
+    }
+    if (root.departing) return
+    root.placeHero()
+    root.departing = true
+    // hudOpen stays true until the face lands, so the bar slot stays empty
+    // while the same blob is still on screen.
+    travelAnim.to = 1
+    travelAnim.restart()
+  }
+
+  function finishDepart() {
+    if (!root.departing) return
+    root.departing = false
+    root.travel = 1
     if (alfred) {
       alfred.hudOpen = false
       alfred.hudFocused = false
     }
+    // The bar icon fades in underneath; the flyer fades out on the same spot.
+    heroFade.to = 0
+    heroFade.restart()
   }
 
   function unfocusHud() {
-    grabFocusTimer.stop()
+    root.releaseKeyboard()
     root.closeMenus()
     root.closePicker()
+    if (root.heroOpacity < 1) {
+      heroFade.stop()
+      root.heroOpacity = 1
+    }
     root.focused = false
     root.opened = true
-    if (composerInput) composerInput.focus = false
+    if (root.departing) root.departing = false
+    if (root.travel > 0.02) {
+      travelAnim.to = 0
+      travelAnim.restart()
+    }
     if (alfred) {
       alfred.hudOpen = true
       alfred.hudFocused = false
     }
+    dockAnim.to = 0
+    dockAnim.restart()
   }
 
   function focusHud() {
-    if (!root.opened) root.pinHudScreen()
+    var fromTray = !root.opened
+    if (fromTray) root.pinHudScreen()
+    if (root.departing) {
+      root.departing = false
+      fromTray = false
+    }
+    if (root.heroOpacity < 1) {
+      heroFade.stop()
+      root.heroOpacity = 1
+    }
     root.opened = true
     root.focused = true
+    root.focusPrimed = false
     if (alfred) {
       alfred.hudOpen = true
       alfred.hudFocused = true
     }
+    if (fromTray) {
+      root.dock = 1
+      root.travel = 1
+      root.placeHero()
+      travelAnim.to = 0
+      travelAnim.restart()
+    } else if (root.travel > 0.02) {
+      travelAnim.to = 0
+      travelAnim.restart()
+      if (root.dock < 0.98) {
+        dockAnim.to = 1
+        dockAnim.restart()
+      }
+    } else {
+      dockAnim.to = 1
+      dockAnim.restart()
+    }
+    focusPrimeTimer.restart()
     grabFocusTimer.tries = 0
     grabFocusTimer.restart()
     if (alfred && typeof alfred.prefetchSlash === "function") alfred.prefetchSlash()
@@ -1088,12 +1240,92 @@ Item {
   }
 
   Timer {
+    id: focusPrimeTimer
+    interval: 75
+    onTriggered: {
+      if (!root.focused || root.departing) return
+      root.focusPrimed = true
+      if (root.busy) escScope.forceActiveFocus()
+      else if (composerInput && !composerInput.activeFocus) composerInput.forceActiveFocus()
+    }
+  }
+
+  NumberAnimation {
+    id: dockAnim
+    target: root
+    property: "dock"
+    duration: 340
+    easing.type: Easing.BezierSpline
+    easing.bezierCurve: [0.65, 0, 0.35, 1, 1, 1]
+  }
+
+  NumberAnimation {
+    id: travelAnim
+    target: root
+    property: "travel"
+    duration: 420
+    easing.type: Easing.BezierSpline
+    easing.bezierCurve: [0.65, 0, 0.35, 1, 1, 1]
+    onFinished: if (root.departing && root.travel > 0.98) root.finishDepart()
+  }
+
+  NumberAnimation {
+    id: heroFade
+    target: root
+    property: "heroOpacity"
+    duration: 160
+    easing.type: Easing.OutCubic
+    onFinished: {
+      if (root.heroOpacity > 0.05) return
+      root.opened = false
+      root.hudScreenName = ""
+      root.travel = 0
+      root.dock = 0
+      root.heroOpacity = 1
+    }
+  }
+
+  Timer {
+    id: heroClock
+    interval: 16
+    repeat: true
+    running: root.opened
+    triggeredOnStart: true
+    onTriggered: root.placeHero()
+  }
+
+  FileView {
+    id: trayWatch
+    path: (Quickshell.env("HOME") || "") + "/.config/Hermes/alfred-tray.json"
+    watchChanges: true
+    printErrors: false
+    onLoaded: root.applyTrayFile(text())
+    onFileChanged: reload()
+  }
+
+  function applyTrayFile(content) {
+    var parsed = null
+    try {
+      parsed = JSON.parse(String(content || ""))
+    } catch (e) {
+      return
+    }
+    if (!parsed) return
+    root.noteTray(Number(parsed.x), Number(parsed.y), Number(parsed.s))
+  }
+
+  Timer {
     id: grabFocusTimer
     property int tries: 0
     interval: 50
     repeat: true
     onTriggered: {
       tries += 1
+      if (root.focusPrimed) {
+        stop()
+        tries = 0
+        return
+      }
       if (root.opened && root.focused) {
         if (root.pickerOpen) {
           stop()
@@ -1373,9 +1605,15 @@ Item {
     color: "transparent"
     WlrLayershell.namespace: "kiwel-alfred"
     WlrLayershell.layer: WlrLayer.Overlay
-    WlrLayershell.keyboardFocus: root.focused ? WlrKeyboardFocus.Exclusive : WlrKeyboardFocus.None
+    // Exclusive locks every pointer event on every monitor to this surface.
+    // Prime it long enough for the field to take the keys, then OnDemand.
+    // While the pill is open the mask is the whole screen, so a click
+    // outside it still lands here and shrinks the face to the ball.
+    WlrLayershell.keyboardFocus: root.focused && !root.departing
+      ? (root.focusPrimed ? WlrKeyboardFocus.OnDemand : WlrKeyboardFocus.Exclusive)
+      : WlrKeyboardFocus.None
     exclusionMode: ExclusionMode.Ignore
-    mask: root.focused ? screenMask : pillMask
+    mask: root.focused && !root.departing ? screenMask : pillMask
 
     Region {
       id: screenMask
@@ -1417,7 +1655,7 @@ Item {
     MouseArea {
       z: -1
       anchors.fill: parent
-      enabled: root.focused
+      enabled: root.focused && !root.departing
       hoverEnabled: false
       onPressed: function(mouse) {
         var p = mapToItem(hudColumn, mouse.x, mouse.y)
@@ -1438,6 +1676,32 @@ Item {
       }
     }
 
+    Item {
+      id: hero
+      z: 8
+      visible: root.opened && root.heroOpacity > 0.01
+      opacity: root.heroOpacity
+      width: root.ballFace
+      height: root.ballFace
+
+      ProfileBlob {
+        anchors.fill: parent
+        visible: hero.visible
+        themeSheet: root.surface
+        agentId: root.profileKey
+        slot: "lead"
+        shape: root.profileShape
+        fill: root.profileFill
+        expression: root.profileExpression
+        idleVariant: root.profileIdle
+        phase: root.profilePhase
+        eyes: root.profileEyes
+        mood: root.mood
+        flow: root.focused && !root.departing ? "open" : "compact"
+        selected: false
+      }
+    }
+
     Column {
       id: hudColumn
       // Compact listening draws the meter and OK beside the ball. The input
@@ -1450,7 +1714,11 @@ Item {
       z: 2
 
       Behavior on width {
-        NumberAnimation { duration: 220; easing.type: Easing.OutCubic }
+        NumberAnimation {
+          duration: 340
+          easing.type: Easing.BezierSpline
+          easing.bezierCurve: [0.23, 1, 0.32, 1, 1, 1]
+        }
       }
 
       Item {
@@ -1492,11 +1760,28 @@ Item {
 
         Behavior on height {
           enabled: pill.motionReady
-          SheetEase { closing: pill.closing }
+          NumberAnimation {
+            duration: pill.closing ? 260 : 340
+            easing.type: Easing.BezierSpline
+            easing.bezierCurve: pill.closing
+              ? [0.4, 0, 0.2, 1, 1, 1]
+              : [0.23, 1, 0.32, 1, 1, 1]
+          }
         }
 
         radius: root.compact ? height / 2 : root.px(Theme.arcRadiusPx())
         color: root.compact ? "transparent" : root.surface
+
+        Behavior on radius {
+          NumberAnimation {
+            duration: 340
+            easing.type: Easing.BezierSpline
+            easing.bezierCurve: [0.23, 1, 0.32, 1, 1, 1]
+          }
+        }
+        Behavior on color {
+          ColorAnimation { duration: 220; easing.type: Easing.OutCubic }
+        }
         border.width: root.compact ? 0 : 1
         border.color: root.rim
         clip: !root.compact
@@ -1523,41 +1808,6 @@ Item {
           }
         }
 
-        ProfileBlob {
-          visible: root.compact
-          z: 3
-          anchors.centerIn: parent
-          width: root.ballFace
-          height: root.ballFace
-          themeSheet: root.surface
-          agentId: root.profileKey
-          slot: "ball"
-          shape: root.profileShape
-          fill: root.profileFill
-          expression: root.profileExpression
-          idleVariant: root.profileIdle
-          phase: root.profilePhase
-          eyes: root.profileEyes
-          mood: root.mood
-          flow: "compact"
-          selected: false
-
-          Behavior on width {
-            NumberAnimation {
-              duration: 240
-              easing.type: Easing.BezierSpline
-              easing.bezierCurve: [0.32, 1.22, 0.42, 1.0, 1.0, 1.0]
-            }
-          }
-          Behavior on height {
-            NumberAnimation {
-              duration: 240
-              easing.type: Easing.BezierSpline
-              easing.bezierCurve: [0.32, 1.22, 0.42, 1.0, 1.0, 1.0]
-            }
-          }
-        }
-
         MouseArea {
           anchors.fill: parent
           z: 10
@@ -1575,8 +1825,15 @@ Item {
 
         Column {
           id: pillBody
-          visible: root.focused
+          // Stay laid out while the face flies between the ball and the row,
+          // so the chip slot has a real position. Opacity carries the fade.
+          visible: root.opened && (root.focused || root.dock > 0.08 || root.departing)
+          opacity: root.focused && !root.departing ? 1 : 0
           z: 4
+
+          Behavior on opacity {
+            NumberAnimation { duration: 200; easing.type: Easing.OutCubic }
+          }
           anchors.fill: parent
           anchors.leftMargin: root.surfacePadX
           anchors.rightMargin: root.surfacePadX
@@ -1693,7 +1950,7 @@ Item {
                 spacing: root.controlGap
 
                 Repeater {
-                  model: root.focused ? root.visibleRoster : 0
+                  model: root.opened && (root.focused || root.dock > 0.08 || root.departing) ? root.visibleRoster : 0
 
                   Item {
                     id: profileChip
@@ -1701,9 +1958,18 @@ Item {
                     readonly property bool current: String(modelData.key || modelData.id || "") === root.profileKey
                     width: root.agentSize
                     height: root.agentSize
+                    Component.onCompleted: if (current) root.leadChip = profileChip
+                    onCurrentChanged: {
+                      if (current) root.leadChip = profileChip
+                      else if (root.leadChip === profileChip) root.leadChip = null
+                    }
+                    Component.onDestruction: if (root.leadChip === profileChip) root.leadChip = null
 
                     ProfileBlob {
                       anchors.fill: parent
+                      // The hero draws the current face, one player, so this
+                      // copy would pop in on top of the flight.
+                      visible: !profileChip.current
                       agentId: String(profileChip.modelData.key || profileChip.modelData.id || "")
                       slot: "chip"
                       shape: String(profileChip.modelData.shape || "cercle")

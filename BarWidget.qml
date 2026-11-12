@@ -23,8 +23,15 @@ BarWidget {
   property string faceEyes: "soft"
   property string faceLabel: "Alfred"
   property string faceMood: "idle"
+  property bool faceHudOpen: false
   property bool faceBusy: false
   property bool popoutSwitchClosing: false
+  property real publishedX: -99999
+  property real publishedY: -99999
+  readonly property string trayPath: (Quickshell.env("HOME") || "") + "/.config/Hermes/alfred-tray.json"
+  // The face lives in the overlay while the HUD is open. The file covers the
+  // replacement bar, which never receives the service object.
+  readonly property bool blobAway: alfred ? alfred.hudOpen === true : root.faceHudOpen
 
   function applyFace(content) {
     var parsed = null
@@ -43,6 +50,7 @@ BarWidget {
     root.faceEyes = String(parsed.eyes || "soft")
     root.faceLabel = String(parsed.label || "Alfred")
     root.faceMood = String(parsed.mood || "idle")
+    root.faceHudOpen = parsed.hudOpen === true
     root.faceBusy = root.faceMood === "busy" || root.faceMood === "working" || root.faceMood === "listening"
   }
 
@@ -61,7 +69,33 @@ BarWidget {
     interval: 250
     repeat: true
     running: true
-    onTriggered: faceFile.reload()
+    onTriggered: {
+      faceFile.reload()
+      root.publishTray()
+    }
+  }
+
+  FileView {
+    id: trayFile
+    path: root.trayPath
+    watchChanges: false
+    atomicWrites: true
+    printErrors: false
+  }
+
+  function publishTray() {
+    if (button.width < 2 || button.height < 2) return
+    var size = Style.bar.iconCanvas
+    var top = button.mapToGlobal((button.width - size) / 2, (button.height - size) / 2)
+    if (Math.abs(top.x - root.publishedX) < 0.5 && Math.abs(top.y - root.publishedY) < 0.5) return
+    root.publishedX = top.x
+    root.publishedY = top.y
+    if (alfred) {
+      alfred.trayX = top.x
+      alfred.trayY = top.y
+      alfred.trayS = size
+    }
+    trayFile.setText(JSON.stringify({ x: top.x, y: top.y, s: size }) + "\n")
   }
 
   implicitWidth: button.implicitWidth
@@ -131,6 +165,7 @@ BarWidget {
     width: Style.bar.iconCanvas
     height: Style.bar.iconCanvas
     enabled: false
+    visible: !root.blobAway
     z: 2
     agentId: root.faceKey
     slot: "tray"

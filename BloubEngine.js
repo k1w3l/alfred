@@ -1698,33 +1698,39 @@ var Bloub = (() => {
 
   // bloubs/bridge.ts
   var CYCLES = {
-    // Idle 1 — butler. Courtesy, a longer exhale, one glance across the room.
-    // Rests 3.6 then 5.4. Loop 12.4s.
+    // Idle 1 — butler. Courtesy, a lean, a longer exhale, one glance.
+    // Rests 2.8 / 1.6 / 3.2. Loop 12.8s.
     idle0: [
-      { state: "idle", duration: 3.6 },
+      { state: "idle", duration: 2.8 },
       { state: "wink", duration: 1.6 },
-      { state: "idle", duration: 5.4 },
+      { state: "idle", duration: 1.6 },
+      { state: "egg", duration: 1.8 },
+      { state: "idle", duration: 3.2 },
       { state: "wide", duration: 1.8 }
     ],
-    // Idle 2 — curious. Look, a short gap so the lean feels prepared, lean,
-    // long settle, a brighter coda. Holds 2.4 / 1.2 / 4.2. Loop 13.0s.
+    // Idle 2 — curious. Look, lean, settle, a wink, then the brighter coda.
+    // Holds 2.2 / 1.2 / 1.6 / 1.8. Loop 13.6s.
     idle1: [
-      { state: "idle", duration: 2.4 },
+      { state: "idle", duration: 2.2 },
       { state: "egg", duration: 1.8 },
       { state: "idle", duration: 1.2 },
       { state: "hexagon", duration: 1.6 },
-      { state: "idle", duration: 4.2 },
-      { state: "wide", duration: 1.8 }
-    ],
-    // Idle 3 — short fuse. Wink, glare, lean, then a long settle so the next
-    // wink lands late. Holds 1.8 / 1.2 / 4.6. Loop 12.6s.
-    idle2: [
+      { state: "idle", duration: 1.6 },
       { state: "wink", duration: 1.6 },
       { state: "idle", duration: 1.8 },
+      { state: "wide", duration: 1.8 }
+    ],
+    // Idle 3 — short fuse. Wink, glare, lean, then a lean-in before the
+    // settle so the next wink lands late. Holds 1.6 / 1.2 / 2.2 / 2.2. Loop 14.0s.
+    idle2: [
+      { state: "wink", duration: 1.6 },
+      { state: "idle", duration: 1.6 },
       { state: "wide", duration: 1.8 },
       { state: "idle", duration: 1.2 },
       { state: "hexagon", duration: 1.6 },
-      { state: "idle", duration: 4.6 }
+      { state: "idle", duration: 2.2 },
+      { state: "egg", duration: 1.8 },
+      { state: "idle", duration: 2.2 }
     ],
     // Hand-built only. The director does not schedule these.
     // Comet recomposes at 2.45; the last 0.05s finishes in the next fade.
@@ -1734,12 +1740,15 @@ var Bloub = (() => {
       { state: "idle", duration: 1 },
       { state: "play", duration: 2.2 }
     ],
-    // Dots are the hero (~60%). The glance is short; their own face holds
-    // longer. Re-entering thinking replays the 0.3s emerge. Loop 8.5s.
+    // Dots are the hero. A full wide, then a wink, so the return to the
+    // dots has a look in between. Re-entering thinking replays the emerge.
+    // Loop 10.2s.
     working: [
-      { state: "thinking", duration: 5.2 },
-      { state: "wide", duration: 1.1 },
-      { state: "idle", duration: 2.2 }
+      { state: "thinking", duration: 4.2 },
+      { state: "wide", duration: 1.8 },
+      { state: "idle", duration: 1.4 },
+      { state: "wink", duration: 1.6 },
+      { state: "idle", duration: 1.2 }
     ],
     // Open eyes, then the mark for its measured hold. The next wide, on the
     // repeat, is the recovery. 2.9s, played three times.
@@ -1764,13 +1773,18 @@ var Bloub = (() => {
     // before the morph into rest.
     end: [{ state: "burst", duration: 2.6 }],
     // Attentive expression only survives on idle (other states bring their
-    // own face). Lean in, come back sooner, small ack. Idle is 6.4 of 9.8s.
+    // own face). A look, a lean, a small ack. Idle is 5.6 of 10.4s.
     listening: [
-      { state: "idle", duration: 3.8 },
+      { state: "idle", duration: 2.4 },
+      { state: "wide", duration: 1.4 },
+      { state: "idle", duration: 1.4 },
       { state: "egg", duration: 1.8 },
-      { state: "idle", duration: 2.6 },
+      { state: "idle", duration: 1.8 },
       { state: "wink", duration: 1.6 }
-    ]
+    ],
+    // One look, then the next pose. Wide's morph is 0.55s; the rest is the
+    // face arriving so a cut does not read as a pop. Not a loop.
+    glance: [{ state: "wide", duration: 1.1 }]
   };
   var SHAPE_ALIAS = {
     circle: "cercle",
@@ -1941,8 +1955,12 @@ var Bloub = (() => {
         return d;
       }
       if (!stale) {
+        const ack = d.latched !== "";
         d.latched = "";
-        d.timeline = compile([{ cycle: "end" }, { cycle: tailOf(d, idleVariant) }], clock);
+        d.timeline = compile(
+          [{ cycle: ack ? "end" : "glance" }, { cycle: tailOf(d, idleVariant) }],
+          clock
+        );
         return d;
       }
       d.latched = "";
@@ -1953,11 +1971,16 @@ var Bloub = (() => {
     const prefix = runningPrefix(d.timeline, clock, ["end"]);
     if (busy) {
       d.latched = "";
-      d.timeline = compile([{ cycle: "working" }], clock, prefix);
+      d.timeline = compile([{ cycle: "glance" }, { cycle: "working" }], clock, prefix);
       return d;
     }
     if (mood === "listening" || wasMood === "listening") {
-      d.timeline = compile([{ cycle: tailOf(d, idleVariant) }], clock, prefix);
+      const enter = mood === "listening" && wasMood !== "listening";
+      d.timeline = compile(
+        enter ? [{ cycle: "glance" }, { cycle: "listening" }] : [{ cycle: tailOf(d, idleVariant) }],
+        clock,
+        prefix
+      );
       return d;
     }
     const outcome = OUTCOME_CLIP[mood];
@@ -1968,7 +1991,7 @@ var Bloub = (() => {
     }
     if (d.latched) return d;
     const keep = runningPrefix(d.timeline, clock, ["end", "success", "error", "attention"]);
-    d.timeline = compile([{ cycle: tailOf(d, idleVariant) }], clock, keep);
+    d.timeline = keep.length ? compile([{ cycle: tailOf(d, idleVariant) }], clock, keep) : compile([{ cycle: "glance" }, { cycle: tailOf(d, idleVariant) }], clock);
     return d;
   }
   function shapeIdOf(raw) {

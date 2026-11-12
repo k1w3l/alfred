@@ -97,11 +97,30 @@ if test -z "$prompt"
   exit 2
 end
 
+set -l script_dir (realpath (dirname (status filename)))
+set -l gw (python3 -B $script_dir/gateways.py get 2>/dev/null)
+set -l kind local
+set -l url ""
+set -l conn_id local
+if test -n "$gw"
+  set kind (printf '%s' $gw | python3 -B -c 'import json,sys; d=json.load(sys.stdin); print(d.get("kind") or "local")' 2>/dev/null)
+  set url (printf '%s' $gw | python3 -B -c 'import json,sys; d=json.load(sys.stdin); print(d.get("url") or "")' 2>/dev/null)
+  set conn_id (printf '%s' $gw | python3 -B -c 'import json,sys; d=json.load(sys.stdin); print(d.get("current") or "local")' 2>/dev/null)
+end
+
 set -l reasoning ""
 if set -q ALFRED_REASONING; and test -n "$ALFRED_REASONING"
   set reasoning $ALFRED_REASONING
+else if test "$kind" != local; and test -n "$url"
+  # Per gateway. The local alfred.json key belongs to this machine and must not
+  # stamp its effort onto a remote profile.
+  set -l py $HOME/.hermes/hermes-agent/venv/bin/python
+  if not test -x "$py"
+    set py python3
+  end
+  set reasoning ($py -B $script_dir/remote-send.py effort-for "$conn_id" 2>/dev/null | string trim)
 else
-  set reasoning (python3 -c '
+  set reasoning (python3 -B -c '
 import json, os
 from pathlib import Path
 p = Path(os.path.expanduser("~/.config/Hermes/alfred.json"))
@@ -111,20 +130,9 @@ try:
 except Exception:
     print("")
 ' 2>/dev/null)
-end
-if test -z "$reasoning"
-  set reasoning ($hermes config get agent.reasoning_effort 2>/dev/null | string trim -c '"' | string trim)
-end
-
-set -l script_dir (realpath (dirname (status filename)))
-set -l gw (python3 $script_dir/gateways.py get 2>/dev/null)
-set -l kind local
-set -l url ""
-set -l conn_id local
-if test -n "$gw"
-  set kind (printf '%s' $gw | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("kind") or "local")' 2>/dev/null)
-  set url (printf '%s' $gw | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("url") or "")' 2>/dev/null)
-  set conn_id (printf '%s' $gw | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("current") or "local")' 2>/dev/null)
+  if test -z "$reasoning"
+    set reasoning ($hermes config get agent.reasoning_effort 2>/dev/null | string trim -c '"' | string trim)
+  end
 end
 
 if test "$kind" != local; and test -n "$url"
@@ -133,7 +141,7 @@ if test "$kind" != local; and test -n "$url"
     set py python3
   end
   cd $HOME
-  set -l profile_name (python3 $script_dir/alfred-profile.py name 2>/dev/null)
+  set -l profile_name (python3 -B $script_dir/alfred-profile.py name 2>/dev/null)
   exec $py -B $script_dir/remote-send.py "$url" "$conn_id" "$session" "$prompt" "$reasoning" "$profile_name"
 end
 
