@@ -13,7 +13,9 @@ import "ComposerTheme.js" as Theme
 Item {
   id: root
 
-  // Coucou cubic-bezier(.32, 1.22, .42, 1): open overshoots, close is quicker and does not.
+  // Sheets still use a short overshoot. The notch itself does not: open is
+  // the boring.notch ease (fast, then a long settle) and close is Coucou's
+  // timing curve, so the return does not bounce.
   component SheetEase: NumberAnimation {
     property bool closing: false
     duration: closing ? 180 : 240
@@ -206,6 +208,32 @@ Item {
   property real trayY: -1
   property real trayS: 0
   property real heroOpacity: 1
+  // 0 = a chin sitting on the bar icon, 1 = the pill at rest.
+  // Open 560 ms and close 440 ms, both smooth, close without overshoot.
+  property real notch: 1
+  property bool notchMoving: false
+  property bool notchClosing: false
+  property bool notchHold: false
+  property bool notchArm: false
+  // Keeps the pill fill from fading in after the chin hands off to it.
+  property bool notchSnap: false
+  property bool notchDocked: false
+  property bool compactAfterNotch: false
+  property real closeDock: 0
+  property real holdX: 0
+  property real holdY: 0
+  property real holdW: 0
+  property real holdH: 0
+  property real holdR: 0
+  property real notchFx: 0
+  property real notchFy: 0
+  property real notchFw: 1
+  property real notchFh: 1
+  property real notchFr: 0
+  property real notchShown: 1
+  property real plateOpacity: 1
+
+  onNotchChanged: root.syncNotchFrame()
 
   readonly property var alfred: service ? service : (shell && typeof shell.serviceFor === "function" ? shell.serviceFor("kiwel.alfred") : null)
   readonly property bool busy: alfred ? alfred.busy === true : false
@@ -532,7 +560,205 @@ Item {
     return { x: p.x, y: p.y, s: s }
   }
 
+  function screenWidth() {
+    if (escScope && escScope.width > 2) return escScope.width
+    return root.activeScreen ? root.activeScreen.width : 0
+  }
+
+  // The closed notch is the bar icon itself: a short capsule on that glyph.
+  function seedFrame() {
+    var tray = root.trayTopLeft()
+    var s = tray.s > 2 ? tray.s : Math.max(root.agentSize, 16)
+    var w = Math.max(s * 1.9, s + 10)
+    var h = s
+    return {
+      x: tray.x + s / 2 - w / 2,
+      y: tray.y,
+      w: w,
+      h: h,
+      r: h / 2
+    }
+  }
+
+  function liveRestFrame() {
+    var w = root.pillWidth
+    var h = root.pillHeight
+    var screenW = root.screenWidth()
+    var r = (!root.focused || root.compact) ? h / 2 : root.px(Theme.arcRadiusPx())
+    return {
+      x: screenW > 2 ? (screenW - w) / 2 : 0,
+      y: Style.bar.sizeHorizontal + Style.gapsOut + root.px(12),
+      w: w,
+      h: h,
+      r: r
+    }
+  }
+
+  function holdRest() {
+    var f = root.liveRestFrame()
+    root.holdX = f.x
+    root.holdY = f.y
+    root.holdW = f.w
+    root.holdH = f.h
+    root.holdR = f.r
+    root.notchHold = true
+  }
+
+  // Width and the horizontal slide lead; the top edge lags, so the chin
+  // drops out of the bar before the shape lets go of it.
+  function notchFrame() {
+    var seed = root.seedFrame()
+    var rest = root.notchHold
+      ? { x: root.holdX, y: root.holdY, w: root.holdW, h: root.holdH, r: root.holdR }
+      : root.liveRestFrame()
+    var t = root.notch
+    if (!isFinite(t) || t >= 0.999) return rest
+    if (t <= 0.001) return seed
+    var tc = Math.max(0, Math.min(1, t))
+    // Chin and width lead a little; the top edge stays on the bar longer.
+    var lead = 1 - Math.pow(1 - tc, 1.2)
+    var lag = Math.pow(tc, 1.4)
+    var cx = (seed.x + seed.w / 2) + ((rest.x + rest.w / 2) - (seed.x + seed.w / 2)) * lead
+    var w = seed.w + (rest.w - seed.w) * lead
+    var h = seed.h + (rest.h - seed.h) * lead
+    var top = seed.y + (rest.y - seed.y) * lag
+    var rad = Math.min(h / 2, seed.r + (rest.r - seed.r) * lead)
+    return {
+      x: cx - w / 2,
+      y: Math.max(0, top),
+      w: Math.max(1, w),
+      h: Math.max(1, h),
+      r: Math.max(0, rad)
+    }
+  }
+
+  function notchContentOf(t, closing) {
+    if (!isFinite(t)) return closing ? 0 : 1
+    t = Math.max(0, Math.min(1, t))
+    if (closing) {
+      if (t > 0.9) return 1
+      if (t < 0.72) return 0
+      return (t - 0.72) / 0.18
+    }
+    if (t < 0.9) return 0
+    return (t - 0.9) / 0.1
+  }
+
+  function syncNotchFrame() {
+    var f = root.notchFrame()
+    root.notchFx = f.x
+    root.notchFy = f.y
+    root.notchFw = f.w
+    root.notchFh = f.h
+    root.notchFr = f.r
+    root.notchShown = root.notchMoving ? root.notchContentOf(root.notch, root.notchClosing) : 1
+    if (root.notchMoving && !root.notchClosing && root.focused && !root.compactAfterNotch
+        && !root.notchDocked && root.notch > 0.7) {
+      root.notchDocked = true
+      dockAnim.to = 1
+      dockAnim.restart()
+    }
+  }
+
+  function runNotch(closing) {
+    var dest = closing ? 0 : 1
+    root.notchArm = false
+    notchOpenAnim.stop()
+    notchCloseAnim.stop()
+    root.notchMoving = true
+    root.notchClosing = closing
+    root.syncNotchFrame()
+    if (Math.abs(root.notch - dest) < 0.01) {
+      root.notch = dest
+      root.notchArm = true
+      root.finishNotch(closing)
+      return
+    }
+    if (closing) {
+      notchCloseAnim.to = 0
+      notchCloseAnim.restart()
+    } else {
+      notchOpenAnim.to = 1
+      notchOpenAnim.restart()
+    }
+    root.notchArm = true
+  }
+
+  function finishNotch(closing) {
+    if (!root.notchArm) return
+    if (closing) {
+      if (!root.notchClosing || root.notch > 0.04) return
+      root.notchArm = false
+      root.notch = 0
+      root.syncNotchFrame()
+      root.departing = false
+      root.notchClosing = false
+      if (alfred) {
+        alfred.hudOpen = false
+        alfred.hudFocused = false
+      }
+      // The chin is on the icon. Fade it so the bar glyph shows through.
+      heroFade.to = 0
+      plateFade.to = 0
+      heroFade.restart()
+      plateFade.restart()
+      return
+    }
+    if (root.notchClosing || root.notch < 0.96) return
+    root.notchArm = false
+    root.notchSnap = true
+    root.notch = 1
+    root.notchMoving = false
+    root.notchClosing = false
+    root.notchHold = false
+    root.notchShown = 1
+    root.syncNotchFrame()
+    Qt.callLater(function() { root.notchSnap = false })
+    if (root.compactAfterNotch) {
+      root.compactAfterNotch = false
+      root.unfocusHud()
+      return
+    }
+    if (root.focused && root.dock < 0.98 && !dockAnim.running) {
+      dockAnim.to = 1
+      dockAnim.restart()
+    }
+  }
+
+  function placeHeroOnNotch() {
+    var f = root.notchFrame()
+    var t = Math.max(0, Math.min(1, root.notch))
+    var tray = root.trayTopLeft()
+    var home = tray.s > 2 ? tray.s : f.h
+    var riding = (root.focused && !root.notchClosing && !root.compactAfterNotch) ? root.agentSize : root.ballFace
+    if (root.notchClosing)
+      riding = root.closeDock > 0.4 ? root.agentSize : root.ballFace
+    var size = home + (riding - home) * t
+    var plateX = f.x + f.w / 2 - size / 2
+    var plateY = f.y + f.h / 2 - size / 2
+    var u = 0
+    if (!root.notchClosing) u = Math.max(0, Math.min(1, root.dock))
+    else if (root.closeDock > 0.2) u = Math.max(0, Math.min(1, (t - 0.72) / 0.28))
+    var destX = plateX
+    var destY = plateY
+    var destS = size
+    if (u > 0.001 && pill.width > 2) {
+      var chip = root.chipTopLeft()
+      destX = chip.x
+      destY = chip.y
+      destS = root.agentSize
+    }
+    hero.width = size * (1 - u) + destS * u
+    hero.height = hero.width
+    hero.x = plateX * (1 - u) + destX * u
+    hero.y = plateY * (1 - u) + destY * u
+  }
+
   function placeHero() {
+    if (root.notchMoving || (root.opened && root.plateOpacity < 0.99 && root.notch < 0.98)) {
+      root.placeHeroOnNotch()
+      return
+    }
     if (!root.opened || pill.width < 2) return
     var d = Math.max(0, Math.min(1, root.dock))
     var t = Math.max(0, Math.min(1, root.travel))
@@ -559,6 +785,18 @@ Item {
   }
 
   function hideHud() {
+    if (!root.opened) {
+      root.departing = false
+      root.notchMoving = false
+      root.travel = 0
+      root.dock = 0
+      if (alfred) alfred.hudOpen = false
+      return
+    }
+    if (root.departing) return
+    // Snapshot the shape that is on screen before focus collapses it to the ball.
+    root.closeDock = root.dock
+    root.holdRest()
     root.releaseKeyboard()
     root.closeMenus()
     root.closePicker()
@@ -566,24 +804,15 @@ Item {
     if (alfred && alfred.listening && typeof alfred.cancelVoice === "function") alfred.cancelVoice()
     root.focused = false
     if (alfred) alfred.hudFocused = false
-    if (!root.opened) {
-      root.departing = false
-      root.travel = 0
-      root.dock = 0
-      if (alfred) alfred.hudOpen = false
-      return
-    }
-    if (root.departing) return
-    root.placeHero()
     root.departing = true
-    // hudOpen stays true until the face lands, so the bar slot stays empty
-    // while the same blob is still on screen.
-    travelAnim.to = 1
-    travelAnim.restart()
+    travelAnim.stop()
+    // hudOpen stays true until the chin sits on the icon, so the bar slot
+    // stays empty while this same face is still on screen.
+    root.runNotch(true)
   }
 
   function finishDepart() {
-    if (!root.departing) return
+    if (!root.departing || root.notchMoving) return
     root.departing = false
     root.travel = 1
     if (alfred) {
@@ -596,6 +825,40 @@ Item {
   }
 
   function unfocusHud() {
+    if (!root.opened) {
+      root.pinHudScreen()
+      plateFade.stop()
+      heroFade.stop()
+      root.heroOpacity = 1
+      root.plateOpacity = 1
+      root.notchHold = false
+      root.notchDocked = false
+      root.compactAfterNotch = false
+      root.dock = 0
+      root.travel = 0
+      root.notch = 0
+      root.focused = false
+      root.departing = false
+      root.opened = true
+      if (alfred) {
+        alfred.hudOpen = true
+        alfred.hudFocused = false
+      }
+      root.releaseKeyboard()
+      root.closeMenus()
+      root.closePicker()
+      root.syncNotchFrame()
+      root.runNotch(false)
+      return
+    }
+    // Still climbing out of the bar: let it arrive, then shrink to the ball.
+    if (root.notchMoving && !root.notchClosing && root.notch < 0.98) {
+      if (root.focused) root.compactAfterNotch = true
+      root.releaseKeyboard()
+      root.closeMenus()
+      root.closePicker()
+      return
+    }
     root.releaseKeyboard()
     root.closeMenus()
     root.closePicker()
@@ -620,15 +883,14 @@ Item {
 
   function focusHud() {
     var fromTray = !root.opened
+    var fromBar = fromTray || root.notchClosing || (root.notchMoving && root.notch < 0.98)
     if (fromTray) root.pinHudScreen()
-    if (root.departing) {
-      root.departing = false
-      fromTray = false
-    }
-    if (root.heroOpacity < 1) {
-      heroFade.stop()
-      root.heroOpacity = 1
-    }
+    plateFade.stop()
+    heroFade.stop()
+    if (root.heroOpacity < 1) root.heroOpacity = 1
+    root.plateOpacity = 1
+    root.departing = false
+    root.compactAfterNotch = false
     root.opened = true
     root.focused = true
     root.focusPrimed = false
@@ -636,12 +898,17 @@ Item {
       alfred.hudOpen = true
       alfred.hudFocused = true
     }
-    if (fromTray) {
-      root.dock = 1
-      root.travel = 1
-      root.placeHero()
-      travelAnim.to = 0
-      travelAnim.restart()
+    if (fromBar) {
+      root.notchHold = false
+      root.notchDocked = false
+      travelAnim.stop()
+      if (fromTray) {
+        root.dock = 0
+        root.travel = 0
+        root.notch = 0
+      }
+      root.syncNotchFrame()
+      root.runNotch(false)
     } else if (root.travel > 0.02) {
       travelAnim.to = 0
       travelAnim.restart()
@@ -1269,6 +1536,37 @@ Item {
     onFinished: if (root.departing && root.travel > 0.98) root.finishDepart()
   }
 
+  // Slow off the bar, smooth through the middle, soft landing.
+  // Same family as Coucou's close curve, held longer so the chin reads.
+  NumberAnimation {
+    id: notchOpenAnim
+    target: root
+    property: "notch"
+    duration: 560
+    easing.type: Easing.BezierSpline
+    easing.bezierCurve: [0.4, 0.0, 0.2, 1.0, 1.0, 1.0]
+    onFinished: {
+      if (!root.notchArm || root.notchClosing) return
+      if (root.notch < 0.96) return
+      root.finishNotch(false)
+    }
+  }
+
+  // Coucou close: timingCurve(0.45, 0, 0.2, 1). No overshoot on the way home.
+  NumberAnimation {
+    id: notchCloseAnim
+    target: root
+    property: "notch"
+    duration: 440
+    easing.type: Easing.BezierSpline
+    easing.bezierCurve: [0.45, 0.0, 0.2, 1.0, 1.0, 1.0]
+    onFinished: {
+      if (!root.notchArm || !root.notchClosing) return
+      if (root.notch > 0.04) return
+      root.finishNotch(true)
+    }
+  }
+
   NumberAnimation {
     id: heroFade
     target: root
@@ -1277,6 +1575,13 @@ Item {
     easing.type: Easing.OutCubic
     onFinished: {
       if (root.heroOpacity > 0.05) return
+      plateFade.stop()
+      root.plateOpacity = 1
+      root.notchMoving = false
+      root.notchHold = false
+      root.notchClosing = false
+      root.notch = 1
+      root.notchShown = 1
       root.opened = false
       root.hudScreenName = ""
       root.travel = 0
@@ -1285,13 +1590,24 @@ Item {
     }
   }
 
+  NumberAnimation {
+    id: plateFade
+    target: root
+    property: "plateOpacity"
+    duration: 160
+    easing.type: Easing.OutCubic
+  }
+
   Timer {
     id: heroClock
     interval: 16
     repeat: true
     running: root.opened
     triggeredOnStart: true
-    onTriggered: root.placeHero()
+    onTriggered: {
+      if (root.notchMoving) root.syncNotchFrame()
+      root.placeHero()
+    }
   }
 
   FileView {
@@ -1697,15 +2013,34 @@ Item {
         phase: root.profilePhase
         eyes: root.profileEyes
         mood: root.mood
-        flow: root.focused && !root.departing ? "open" : "compact"
+        flow: root.focused && !root.departing && (!root.notchMoving || root.notchShown > 0.9) ? "open" : "compact"
         selected: false
       }
+    }
+
+    Rectangle {
+      id: notchPlate
+      z: 1
+      visible: root.opened && root.notchMoving
+      opacity: root.plateOpacity
+      antialiasing: true
+      x: root.notchFx
+      y: root.notchFy
+      width: Math.max(1, root.notchFw)
+      height: Math.max(1, root.notchFh)
+      radius: root.notchFr
+      color: root.surface
+      border.width: root.notch > 0.5 ? 1 : 0
+      border.color: root.rim
     }
 
     Column {
       id: hudColumn
       // Compact listening draws the meter and OK beside the ball. The input
       // mask is this column, so it has to be wide enough to contain them.
+      // While the notch is travelling the composer stays hidden; the plate
+      // behind this column is the only shape on screen.
+      opacity: root.notchMoving ? root.notchShown : 1
       width: root.listening && !root.focused ? Math.max(root.pillWidth, voiceOkRow.implicitWidth) : root.pillWidth
       spacing: 0
       anchors.horizontalCenter: parent.horizontalCenter
@@ -1770,7 +2105,7 @@ Item {
         }
 
         radius: root.compact ? height / 2 : root.px(Theme.arcRadiusPx())
-        color: root.compact ? "transparent" : root.surface
+        color: (root.compact || root.notchMoving) ? "transparent" : root.surface
 
         Behavior on radius {
           NumberAnimation {
@@ -1780,9 +2115,10 @@ Item {
           }
         }
         Behavior on color {
+          enabled: !root.notchSnap
           ColorAnimation { duration: 220; easing.type: Easing.OutCubic }
         }
-        border.width: root.compact ? 0 : 1
+        border.width: (root.compact || root.notchMoving) ? 0 : 1
         border.color: root.rim
         clip: !root.compact
 
@@ -1811,7 +2147,7 @@ Item {
         MouseArea {
           anchors.fill: parent
           z: 10
-          enabled: root.compact
+          enabled: root.compact && !root.notchMoving
           hoverEnabled: !root.listening
           cursorShape: Qt.PointingHandCursor
           onEntered: {
