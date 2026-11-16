@@ -1,12 +1,13 @@
 import QtQuick
 import QtQuick.Shapes
+import QtQuick.Window as QW
 import qs.Commons
 import "BloubEngine.js" as Bloub
 
 // One bloub per agent. Paths stay in the engine's viewBox and a single matrix
 // maps them onto this item, so the eyes and the body share one scale. The
-// face is drawn into a supersampled layer: at chip size the curve renderer
-// alone leaves stair-steps on the rim.
+// face is drawn into a layer at device resolution: the curve renderer alone
+// leaves stair-steps on the rim, and the layer's MSAA smooths what is left.
 //
 // The rim is painted after the fill. A stroke drawn underneath is half-covered
 // by the fill, which is why the outline used to disappear. Satellite dots
@@ -14,11 +15,17 @@ import "BloubEngine.js" as Bloub
 Item {
   id: root
 
+  // Device pixels times a 2x oversample. Bilinear minification only filters
+  // correctly up to about 2:1, so 2x is enough; the old 6x sampled 4 texels
+  // per output pixel and aliased anyway. Mipmaps stay off: they blur the cream
+  // rim when the layer is drawn back.
+  readonly property real dpr: QW.Window.window && QW.Window.window.devicePixelRatio > 0
+    ? QW.Window.window.devicePixelRatio : 1
+
   layer.enabled: width > 2 && height > 2
-  layer.textureSize: Qt.size(Math.ceil(width * root.supersample), Math.ceil(height * root.supersample))
+  layer.textureSize: Qt.size(Math.ceil(width * root.dpr * root.supersample), Math.ceil(height * root.dpr * root.supersample))
   layer.smooth: true
-  // Mipmaps blur the cream rim when the 6× pass is scaled back. Bilinear
-  // from the full-size FBO keeps the stroke a hard line.
+  layer.samples: 4
   layer.mipmap: false
 
   property string agentId: ""
@@ -38,14 +45,44 @@ Item {
   // "" = free-running mood cycle; "compact" / "open" = follow the agent's
   // state flow (working, outcome x3, notification, end).
   property string flow: ""
+  // Flight of the hero between the bar icon and the pill: "open" climbing out
+  // of the bar, "close" landing on it, "" otherwise.
+  property string flight: ""
+  // Unit heading from the blob centre to where the flight is going, in -1..1
+  // on both axes. (0, 0) when there is no flight or the target is on the centre.
+  property point flightTarget: Qt.point(0, 0)
+  // Velocity stretch in flight: the body stretches by `stretch` along
+  // `stretchAngle` (degrees, screen space, clockwise) and narrows across it to
+  // keep its area. 1 and 0 leave the blob untouched.
+  property real stretch: 1
+  property real stretchAngle: 0
+  // Landing squash: `plop` runs 0 -> 1 -> 0 and squashes the bottom edge by
+  // `plopDepth`. The owner sets the depth; 0 leaves the blob untouched.
+  property real plop: 0
+  property real plopDepth: 0
   // Editor draft and swatches. The pose stays on the idle face at clock 0.
   property bool still: false
-  property real supersample: 6
+  // Layer oversample per device pixel. See `dpr` above.
+  property real supersample: 2
+  // Pointer position from Service (virtual-desktop logical px, NaN until the
+  // first reading). The owner passes them; cursorAt is Date.now() of the last
+  // move. The eyes look while the pointer is fresh (2.5 s).
+  property real cursorX: NaN
+  property real cursorY: NaN
+  property real cursorAt: 0
+  // Pointer relative to this blob's centre, screen px, y down. Set in sample().
+  property real lookX: 0
+  property real lookY: 0
+  property bool lookActive: false
+  // Only the blob its owner enables looks at the pointer. The hero looks while
+  // the HUD is open, the bar icon while it is the face on screen, chips never.
+  property bool lookEnabled: false
 
   readonly property string playerId: (agentId !== "" ? agentId : shape + fill) + "/" + slot
   readonly property real unit: Math.min(width, height) / 316
   readonly property bool voice: mood === "listening"
   readonly property bool marching: mood === "busy" || mood === "working" || mood === "listening"
+    || mood === "reasoning" || mood === "speaking"
     || mood === "success" || mood === "error" || mood === "attention" || mood === "permission"
   readonly property color paper: "#f6f3ec"
   // Outcome tints the whole rim. Working keeps the cream hairline and lets
@@ -208,6 +245,40 @@ Item {
   implicitWidth: 26
   implicitHeight: 26
 
+  // One affine matrix, so no transform-list order is involved. The stretch
+  // runs along the heading (stretchAngle, degrees, screen space, y down) and
+  // the cross axis gets 1 / sqrt(stretch). The landing squash then scales from
+  // the bottom centre. Both are about the blob centre, or the bottom centre.
+  function squashMatrix() {
+    var k = Math.max(0.2, root.stretch)
+    var r = 1 / Math.sqrt(k)
+    var th = root.stretchAngle * Math.PI / 180
+    var ux = Math.cos(th)
+    var uy = Math.sin(th)
+    var g = k - r
+    var a = r + g * ux * ux
+    var b = g * ux * uy
+    var d = r + g * uy * uy
+    var cx = root.width / 2
+    var cy = root.height / 2
+    // Stretch about the centre: p' = c + M (p - c).
+    var sx = cx - (a * cx + b * cy)
+    var sy = cy - (b * cx + d * cy)
+    // Plop about the bottom centre: p'' = q + D p', with D = diag(dx, dy).
+    var dx = 1 + root.plopDepth * root.plop
+    var dy = 1 - root.plopDepth * root.plop
+    var tx = cx - dx * cx + dx * sx
+    var ty = root.height - dy * root.height + dy * sy
+    return Qt.matrix4x4(
+      dx * a, dx * b, 0, tx,
+      dy * b, dy * d, 0, ty,
+      0, 0, 1, 0,
+      0, 0, 0, 1
+    )
+  }
+
+  transform: Matrix4x4 { matrix: root.squashMatrix() }
+
   // viewBox (x, y) -> pixels. ma..mf is the engine matrix (identity for the body).
   function mapOf(ma, mb, mc, md, me, mf) {
     var s = root.unit
@@ -236,10 +307,24 @@ Item {
     return Math.max(6, span / Math.max(width, 0.05))
   }
 
+  // The pointer as a look: mapped into this item, then taken relative to the
+  // centre. Stale or missing readings turn the look off.
+  function updateLook(now) {
+    var fresh = root.lookEnabled && !root.still && root.cursorAt > 0 && now - root.cursorAt < 2500
+      && isFinite(root.cursorX) && isFinite(root.cursorY)
+    root.lookActive = fresh
+    if (!fresh) return
+    var p = root.mapFromGlobal(root.cursorX, root.cursorY)
+    root.lookX = p.x - root.width / 2
+    root.lookY = p.y - root.height / 2
+  }
+
   function sample() {
+    var now = Date.now()
+    root.updateLook(now)
     root.frame = Bloub.tick(
       root.playerId,
-      root.still ? 0 : Date.now(),
+      root.still ? 0 : now,
       root.shape,
       root.voice ? "attentif" : root.expression,
       root.pose !== "" ? root.pose : root.mood,
@@ -247,7 +332,14 @@ Item {
       root.still ? 0 : root.phase,
       String(root.fill),
       root.eyes,
-      root.still ? "still" : root.flow
+      root.still ? "still" : root.flow,
+      root.still ? "" : root.flight,
+      root.flightTarget.x,
+      root.flightTarget.y,
+      root.lookX,
+      root.lookY,
+      root.lookActive ? 1 : 0,
+      root.width
     )
   }
 
@@ -298,6 +390,14 @@ Item {
   Component.onCompleted: root.sampleStill()
 
   Component.onDestruction: Bloub.release(root.playerId)
+
+  // Hovering a directed bloub gives it a small perk. Free-running faces (the
+  // tray and other chips) have no flow and no director, so they stay still.
+  HoverHandler {
+    onHoveredChanged: {
+      if (hovered && root.agentId !== "" && root.flow !== "") Bloub.react(root.agentId, "hover", Date.now())
+    }
+  }
 
   Repeater {
     model: 6

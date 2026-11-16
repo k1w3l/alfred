@@ -46,12 +46,32 @@ Item {
   property string lastReply: ""
   property bool hudOpen: false
   property bool hudFocused: false
+  // True while the face is on the HUD (open, or flying to or from the bar
+  // icon). The overlay clears it at the close handoff, so the icon fades in as
+  // the chin lands. hudOpen drops at once on hide, so the tray cannot read that.
+  property bool trayAway: false
   // Last published icon rect, virtual-desktop pixels. The bar widget writes
   // the same numbers to alfred-tray.json because a replacement bar cannot
   // see this service.
   property real trayX: -1
   property real trayY: -1
   property real trayS: 0
+  // Pointer position in virtual-desktop logical pixels (scripts/cursor.py,
+  // Hyprland socket). cursorAt is Date.now() of the last change: a blob looks
+  // at the pointer while it is fresh and goes back to its own animation after.
+  property real cursorX: 0
+  property real cursorY: 0
+  property real cursorAt: 0
+  // Icon rect per screen name, {name: {x, y, s}}, from the bars. The HUD flies
+  // from the rect of the screen it is on; trayX/Y/S stay the last writer.
+  property var trayRects: ({})
+  // Writes one screen's rect without replacing the other bars' entries.
+  function setTrayRect(name, rect) {
+    if (!name) return
+    var m = Object.assign({}, root.trayRects)
+    m[name] = rect
+    root.trayRects = m
+  }
   property string voicePath: ""
   property string modelName: ""
   property string modelProvider: ""
@@ -85,6 +105,8 @@ Item {
   property bool transcribing: false
   property bool awaitingPermission: false
   property string lastOutcome: ""
+  // True once the user has acknowledged the active chat's outcome (ball, bar or chip).
+  property bool outcomeSeen: false
   property string pickMode: "files"
   property string pickOutPath: ""
   property string pickDonePath: ""
@@ -97,6 +119,16 @@ Item {
   readonly property bool anyBusy: busyCount > 0
   property var activity: []
   property string liveText: ""
+  // Assistant text is arriving for the active chat. A tool step ends it.
+  property bool streaming: false
+  readonly property bool toolRunning: {
+    for (var i = 0; i < activity.length; i++) {
+      if (activity[i].status === "running") return true
+    }
+    return false
+  }
+  // Busy with no text and no tool step yet: the model is thinking.
+  readonly property bool reasoning: busy && !streaming && !toolRunning
   property real busyStartedAt: 0
   // Per-chat stream buffers and Process handles; mutated in place, flushed into `chats` by flushTimer.
   property var runtime: ({})
@@ -133,6 +165,19 @@ Item {
   signal menuRequested(string kind)
   signal replyReceived(string text)
   signal transcriptReady(string text)
+  // Tool steps and the user's own typing in the active chat. Overlay turns
+  // them into bloub reactions.
+  signal toolStarted()
+  signal toolFailed()
+  signal userTyped()
+  // Reply and user cues for the bloub: the reply asked a question, laughed,
+  // or the user thanked Alfred. Overlay turns them into reactions.
+  signal assistantAsked()
+  signal assistantLaughed()
+  signal userThanked()
+  readonly property var laughPattern: /\b(ha){2,}\b|\b(he){2,}\b|\bk{3,}\b|\brs(rs)+\b|😂|🤣|😆|😄/i
+  readonly property var thanksPattern: /\b(obrigad[oa]s?|valeu|vlw|brigad[oa]|thanks?|thank you|thx|ty|gracias|merci)\b/i
+  readonly property var heartPattern: /❤|🙏|💙/
 
   function refreshStatus() {
     if (statusProcess.running) return
@@ -152,6 +197,7 @@ Item {
       busy: false,
       lastError: "",
       lastOutcome: "",
+      outcomeSeen: false,
       lastReply: "",
       awaitingPermission: false,
       activity: [],
@@ -190,8 +236,15 @@ Item {
     var idx = root.chatIndex(id)
     if (idx < 0) return
     var list = root.chats.slice()
-    var next = Object.assign({}, list[idx])
+    var prev = list[idx]
+    var next = Object.assign({}, prev)
     for (var key in patch) next[key] = patch[key]
+    // A new outcome (not a repeat of the one already there) shows again.
+    var freshOutcome = patch.lastOutcome !== undefined && String(patch.lastOutcome) !== ""
+      && String(patch.lastOutcome) !== String(prev.lastOutcome || "")
+    var freshError = patch.lastError !== undefined && String(patch.lastError) !== ""
+      && String(patch.lastError) !== String(prev.lastError || "")
+    if (freshOutcome || freshError) next.outcomeSeen = false
     list[idx] = next
     root.chats = list
     if (String(id) === root.activeChatId) root.syncActive()
@@ -205,10 +258,12 @@ Item {
     busy = c.busy === true
     lastError = String(c.lastError || "")
     lastOutcome = String(c.lastOutcome || "")
+    outcomeSeen = c.outcomeSeen === true
     lastReply = String(c.lastReply || "")
     awaitingPermission = c.awaitingPermission === true
     activity = c.activity || []
     liveText = String(c.liveText || "")
+    streaming = c.streaming === true
     busyStartedAt = Number(c.startedAt || 0)
   }
 
@@ -227,6 +282,13 @@ Item {
     root.patchChat(root.activeChatId, { lastError: msg, lastOutcome: msg !== "" ? "error" : "" })
   }
 
+  // The user has looked at this chat's outcome: the avatar and chips stop showing it.
+  function acknowledgeOutcome(chatId) {
+    var idx = root.chatIndex(chatId)
+    if (idx < 0 || root.chats[idx].outcomeSeen === true) return
+    root.patchChat(chatId, { outcomeSeen: true })
+  }
+
   function newChat() {
     root.ensureChat()
     var cur = root.activeChat()
@@ -242,6 +304,7 @@ Item {
     if (root.chatIndex(id) < 0) return
     root.activeChatId = String(id)
     root.syncActive()
+    root.acknowledgeOutcome(id)
   }
 
   function cycleChat(delta) {
@@ -286,9 +349,11 @@ Item {
     }
     if (prompt === "") prompt = "Use the attached files as context."
     var id = chat.id
+    if ((root.thanksPattern.test(prompt) || root.heartPattern.test(prompt)) && id === root.activeChatId) root.userThanked()
     var sessionRef = AlfredModel.scopedSessionRef(chat.sessionRef, chat.sessionScope, root.profileKey)
     root.runtime[id] = {
       out: "", err: "", text: "", result: "", resultError: "", sessionId: "",
+      chatId: id, streaming: false, laughed: false,
       scope: root.profileKey,
       activity: [], permission: false, aborting: false, dirty: false
     }
@@ -298,9 +363,11 @@ Item {
       lastError: "",
       lastReply: "",
       lastOutcome: "",
+      outcomeSeen: false,
       awaitingPermission: false,
       activity: [],
       liveText: "",
+      streaming: false,
       startedAt: Date.now()
     }
     if (chat.title === "New chat") patch.title = AlfredModel.chatTitle(prompt)
@@ -345,7 +412,15 @@ Item {
       if (ev.session_id) rt.sessionId = String(ev.session_id)
     } else if (type === "text") {
       rt.text += String(ev.text || "")
+      rt.streaming = true
+      // Once per turn, on the first laugh in the streamed text.
+      if (!rt.laughed && root.laughPattern.test(rt.text.slice(-80))) {
+        rt.laughed = true
+        if (rt.chatId === root.activeChatId) root.assistantLaughed()
+      }
     } else if (type === "tool_use") {
+      rt.streaming = false
+      if (rt.chatId === root.activeChatId) root.toolStarted()
       rt.activity.push({
         key: String(ev.tool_call_id || ev.name || ""),
         name: String(ev.name || "tool"),
@@ -368,6 +443,7 @@ Item {
         row.output = AlfredModel.previewText(ev.output, 160)
         break
       }
+      if (ev.is_error === true && rt.chatId === root.activeChatId) root.toolFailed()
     } else if (type === "result") {
       rt.result = String(ev.text || "")
       if (ev.session_id) rt.sessionId = String(ev.session_id)
@@ -383,6 +459,7 @@ Item {
     root.patchChat(id, {
       activity: rt.activity.map(function(r) { return Object.assign({}, r) }),
       liveText: tail,
+      streaming: rt.streaming === true,
       awaitingPermission: rt.permission === true
     })
   }
@@ -768,8 +845,8 @@ Item {
     if (root.listening) mood = "listening"
     else if (root.awaitingPermission) mood = "attention"
     else if (root.busy) mood = "busy"
-    else if (root.lastOutcome === "error") mood = "error"
-    else if (root.lastOutcome === "success") mood = "success"
+    else if (!root.outcomeSeen && root.lastOutcome === "error") mood = "error"
+    else if (!root.outcomeSeen && root.lastOutcome === "success") mood = "success"
     else if (root.statusKnown && !root.gatewayActive) mood = "error"
     var payload = JSON.stringify({
       key: root.profileKey,
@@ -781,7 +858,8 @@ Item {
       phase: root.profilePhase,
       eyes: root.profileEyes,
       mood: mood,
-      hudOpen: root.hudOpen === true
+      hudOpen: root.hudOpen === true,
+      trayAway: root.trayAway === true
     })
     if (payload === root.faceSig) return
     root.faceSig = payload
@@ -939,6 +1017,9 @@ Item {
     slashLoading = false
   }
 
+  // The user typed in the composer (programmatic text changes do not count).
+  function noteTyped() { root.userTyped() }
+
   function requestFocus() {
     root.hudOpen = true
     root.hudFocused = true
@@ -989,7 +1070,7 @@ Item {
       return
     }
     var chat = root.chats[idx]
-    var patch = { busy: false, awaitingPermission: false, liveText: "" }
+    var patch = { busy: false, awaitingPermission: false, liveText: "", streaming: false }
     if (rt.sessionId !== "") {
       patch.sessionRef = "id:" + rt.sessionId
       patch.sessionScope = rt.scope
@@ -1017,6 +1098,15 @@ Item {
     }
     root.patchChat(id, patch)
     if (reply !== "") root.replyReceived(reply)
+    if (!failed && reply !== "" && id === root.activeChatId && root.endsWithQuestion(reply)) root.assistantAsked()
+  }
+
+  // True when the reply ends with a question mark, allowing closing quotes,
+  // brackets, emphasis and emoji after it.
+  function endsWithQuestion(text) {
+    var t = String(text || "").trim()
+    t = t.replace(/(?:[\s"'”’»)\]}*_~]|️|‍|\uD83C[\uDC00-\uDFFF]|\uD83D[\uDC00-\uDFFF]|\uD83E[\uDD00-\uDFFF]|[☀-➿])+$/, "")
+    return t.slice(-1) === "?"
   }
 
   IpcHandler {
@@ -1551,6 +1641,34 @@ Item {
     }
   }
 
+  // Pointer watcher. One long-lived process; cursor.py prints a line only when
+  // the pointer moves. If it exits, the timer restarts it after 2 s.
+  Process {
+    id: cursorProcess
+    command: ["/usr/bin/python3", "-B", root.pluginDir + "/scripts/cursor.py"]
+    running: root.pluginDir !== ""
+    stdout: SplitParser {
+      onRead: function(line) {
+        var parts = String(line).trim().split(/\s+/)
+        if (parts.length !== 2) return
+        var x = Number(parts[0])
+        var y = Number(parts[1])
+        if (!isFinite(x) || !isFinite(y)) return
+        root.cursorX = x
+        root.cursorY = y
+        root.cursorAt = Date.now()
+      }
+    }
+    onExited: function() { cursorRestart.restart() }
+  }
+
+  Timer {
+    id: cursorRestart
+    interval: 2000
+    repeat: false
+    onTriggered: cursorProcess.running = true
+  }
+
   FileView {
     id: faceFile
     path: root.home + "/.config/Hermes/alfred-face.json"
@@ -1560,10 +1678,12 @@ Item {
   }
 
   onHudOpenChanged: root.publishFace()
+  onTrayAwayChanged: root.publishFace()
   onBusyChanged: root.publishFace()
   onListeningChanged: root.publishFace()
   onAwaitingPermissionChanged: root.publishFace()
   onLastOutcomeChanged: root.publishFace()
+  onOutcomeSeenChanged: root.publishFace()
   onGatewayActiveChanged: root.publishFace()
 
   Component.onCompleted: {

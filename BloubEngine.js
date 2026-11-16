@@ -40,6 +40,7 @@ var Bloub = (() => {
   var bridge_exports = {};
   __export(bridge_exports, {
     play: () => play,
+    react: () => react,
     release: () => release,
     tick: () => tick
   });
@@ -705,6 +706,7 @@ var Bloub = (() => {
       split: EYE_SPLIT,
       eyes: pair2(EYE_W, EYE_H),
       eyeAlpha: 1,
+      eyeScale: 1,
       bodyAlpha: 1,
       dots: [],
       arcs: [],
@@ -748,6 +750,297 @@ var Bloub = (() => {
     const p = ((t - index * 0.5) / 1.5 % 1 + 1) % 1;
     const k = p < 0.5 ? 0.5 - 0.5 * Math.cos(p * TAU) : 0;
     return clamp(k * 2);
+  }
+  var REPOS_SAUT = { sx: 1, sy: 1, offY: 0 };
+  function hopPhase(t, debut, longueur, hauteur) {
+    const p = (t - debut) / longueur;
+    if (p < 0 || p > 1) return null;
+    if (p < 0.2) {
+      const s2 = Math.sin(Math.PI * p / 0.2);
+      return { sx: 1 + 0.06 * s2, sy: 1 - 0.1 * s2, offY: 0 };
+    }
+    if (p < 0.85) {
+      const s2 = Math.sin(Math.PI * (p - 0.2) / 0.65);
+      return { sx: 1 - 0.04 * s2, sy: 1 + 0.06 * s2, offY: -hauteur * s2 };
+    }
+    const s = Math.sin(Math.PI * (p - 0.85) / 0.15);
+    return { sx: 1 + 0.06 * s, sy: 1 - 0.1 * s, offY: 0 };
+  }
+  var pairOpen = (w, h, open) => [
+    { w, h, open },
+    { w, h, open }
+  ];
+  var DROWSY_SX = 1.04;
+  var DROWSY_SY = 0.94;
+  var DROWSY_CY = 0.05;
+  var DROWSY_OPEN = 0.45;
+  var DROWSY_PITCH_DROP = 12;
+  var DROWSY_ROLL = -13;
+  var HOP_PITCH = 2;
+  var PONDER = {
+    /** duree de l'etat, et periode de tout ce qui y oscille : la boucle tombe juste */
+    duree: 3,
+    /** echelle du corps : c'est la place laissee a la bulle au-dessus */
+    echelle: 0.8,
+    /** amplitude du souffle autour de l'echelle */
+    souffle: 0.01,
+    /** decalage du corps ET des yeux : bas de +0.24 pour degager le haut, gauche de 0.12 */
+    decalage: { x: -0.12, y: 0.24 },
+    /**
+     * regard vers la bulle, en degres, relatif au repos (lacet a droite, tangage en haut).
+     * Lacet 6 et non 14 : a 14 l'oeil exterieur tape le bord du corps reduit a 0,8, et la
+     * table de decalage (`eyefit.ts`) le repousse de 0,9 unite, ce qui casse l'invariant
+     * "choisir le cercle = ne rien choisir". Mesure : 14 -> 0,9 ; 10 -> 0,12 ; 6 -> 0.
+     */
+    regard: { yaw: 6, pitch: 4, roll: -6 },
+    /** amplitude du balancement du regard, en degres : meme periode que la duree */
+    balancement: 3,
+    /** centre, largeur, hauteur et rayon des coins de la bulle */
+    bulle: { x: 0.42, y: -1, l: 0.95, h: 0.52, coin: 0.2 },
+    /** queue sous le bord bas : deux pieds sur le bord, pointe vers la tete */
+    queue: { droite: -0.04, gauche: -0.22, pointe: { x: -0.3, y: 0.38 } },
+    /** flottement de la bulle, periode 1.5 s (divise la duree) */
+    flottement: 0.02,
+    flottementPeriode: 1.5,
+    /** les trois points : ecart, rayon de repos, gonflement a la pulsation, couleur claire */
+    point: { ecart: 0.25, r: 0.075, gonflement: 0.35, couleur: "#f4f1ea" }
+  };
+  function contourBulle(p) {
+    const { l, h, coin } = p.bulle;
+    const dl = l / 2;
+    const dh = h / 2;
+    const N = 8;
+    const arc = (cx, cy, a0, a1) => Array.from({ length: N + 1 }, (_, j) => {
+      const a = a0 + (a1 - a0) * j / N;
+      return { x: cx + coin * Math.cos(a), y: cy + coin * Math.sin(a) };
+    });
+    return [
+      ...arc(-dl + coin, -dh + coin, Math.PI, 1.5 * Math.PI),
+      ...arc(dl - coin, -dh + coin, 1.5 * Math.PI, 2 * Math.PI),
+      ...arc(dl - coin, dh - coin, 0, 0.5 * Math.PI),
+      { x: p.queue.droite, y: dh },
+      p.queue.pointe,
+      { x: p.queue.gauche, y: dh },
+      ...arc(-dl + coin, dh - coin, 0.5 * Math.PI, Math.PI)
+    ];
+  }
+  var PONDER_CONTOUR = contourBulle(PONDER);
+  var PONDER_BULLE_PATH = polyPath(PONDER_CONTOUR);
+  var GLYPHE = PONDER.point.couleur;
+  var TRAIT = 0.07;
+  var rad = (deg2) => deg2 * Math.PI / 180;
+  var repere = (s = 1, rot = 0, dx = 0, dy = 0) => ({
+    x: PONDER.bulle.x + dx,
+    y: PONDER.bulle.y + dy,
+    s,
+    rot
+  });
+  function placer(r, p) {
+    const c = Math.cos(r.rot);
+    const s = Math.sin(r.rot);
+    return { x: r.x + r.s * (p.x * c - p.y * s), y: r.y + r.s * (p.x * s + p.y * c) };
+  }
+  function forme(pts, ancre, r, opacite = 1) {
+    const c = placer(r, ancre);
+    return {
+      x: c.x,
+      y: c.y,
+      // `r` ne sert qu'au filtre du moteur (il ecarte les r nuls) : le trace vient de `d`
+      r: 0.05 * r.s,
+      opacity: opacite,
+      color: GLYPHE,
+      d: polyPath(pts.map((p) => ({ x: r.s * (p.x - ancre.x), y: r.s * (p.y - ancre.y) }))),
+      rot: r.rot * 180 / Math.PI
+    };
+  }
+  function trait(a, b, w, r, opacite = 1) {
+    const pts = hullOfCircles(a.x, a.y, w / 2, b.x, b.y, w / 2, 24);
+    return forme(pts, { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }, r, opacite);
+  }
+  function point(c, rayon, r, opacite = 1) {
+    const p = placer(r, c);
+    return { x: p.x, y: p.y, r: rayon * r.s, opacity: opacite, color: GLYPHE };
+  }
+  function bulleScene(t, opts) {
+    var _a, _b, _c;
+    const w = TAU * t / opts.duree;
+    const echelle = PONDER.echelle + PONDER.souffle * Math.sin(w);
+    const flotte = PONDER.flottement * Math.sin(TAU * t / ((_a = opts.flottementPeriode) != null ? _a : PONDER.flottementPeriode));
+    const dec = PONDER.decalage;
+    const bulle = {
+      x: PONDER.bulle.x - dec.x,
+      y: PONDER.bulle.y + flotte - dec.y,
+      // `r` ne sert qu'au filtre du moteur : le trace vient de `d`, la demi-hauteur suffit
+      r: PONDER.bulle.h / 2,
+      opacity: 1,
+      d: PONDER_BULLE_PATH
+    };
+    const glyphes = ((_c = (_b = opts.glyphe) == null ? void 0 : _b.call(opts, t)) != null ? _c : []).map((g) => __spreadProps(__spreadValues({}, g), {
+      x: g.x - dec.x,
+      y: g.y + flotte - dec.y
+    }));
+    return {
+      sil: circle(1, { sx: echelle, sy: echelle }),
+      offX: dec.x,
+      offY: dec.y,
+      // les yeux suivent la taille du corps, sinon ils sortent de la silhouette
+      eyeScale: echelle,
+      dots: [bulle, ...glyphes]
+    };
+  }
+  function dessinQuestion(r) {
+    const C = { x: 0, y: -0.05 };
+    const RAYON = 0.065;
+    const arc = [];
+    for (let deg2 = 170; deg2 <= 380; deg2 += 30) {
+      const a = rad(deg2);
+      arc.push({ x: C.x + RAYON * Math.cos(a), y: C.y + RAYON * Math.sin(a) });
+    }
+    const tige = { x: 0, y: 0.035 };
+    const out = [];
+    for (let i = 0; i < arc.length - 1; i++) out.push(trait(arc[i], arc[i + 1], TRAIT, r));
+    out.push(trait(arc[arc.length - 1], tige, TRAIT, r));
+    out.push(point({ x: 0, y: 0.1 }, 0.04, r));
+    return out;
+  }
+  function dessinExclamation(r) {
+    const barre = hullOfCircles(0, -0.11, 0.045, 0, 0.02, 0.03, 24);
+    return [forme(barre, { x: 0, y: -0.045 }, r), point({ x: 0, y: 0.1 }, 0.042, r)];
+  }
+  function dessinTrois(r, opacites) {
+    return opacites.map(
+      (o, i) => point({ x: (i - 1) * PONDER.point.ecart, y: 0 }, PONDER.point.r, r, o)
+    );
+  }
+  function dessinZ(cx, cy, h, r, opacite) {
+    return [
+      trait({ x: cx - h, y: cy - h }, { x: cx + h, y: cy - h }, TRAIT, r, opacite),
+      trait({ x: cx + h, y: cy - h }, { x: cx - h, y: cy + h }, TRAIT, r, opacite),
+      trait({ x: cx - h, y: cy + h }, { x: cx + h, y: cy + h }, TRAIT, r, opacite)
+    ];
+  }
+  function dessinChevrons(r) {
+    const out = [];
+    for (const cx of [-0.11, 0.11]) {
+      const gauche = { x: cx - 0.075, y: 0.03 };
+      const sommet = { x: cx, y: -0.05 };
+      const droite = { x: cx + 0.075, y: 0.03 };
+      out.push(trait(gauche, sommet, TRAIT, r), trait(sommet, droite, TRAIT, r));
+    }
+    return out;
+  }
+  var COEUR_ECHELLE = 0.36 / 32;
+  var COEUR = Array.from({ length: 72 }, (_, i) => {
+    const t = TAU * i / 72;
+    const x = 16 * Math.sin(t) ** 3;
+    const y = -(13 * Math.cos(t) - 5 * Math.cos(2 * t) - 2 * Math.cos(3 * t) - Math.cos(4 * t)) - 2.5;
+    return { x: x * COEUR_ECHELLE, y: y * COEUR_ECHELLE };
+  });
+  function dessinCoeur(r) {
+    return [forme(COEUR, { x: 0, y: 0 }, r)];
+  }
+  var COCHE = { a: { x: -0.1, y: 0 }, b: { x: -0.03, y: 0.07 }, c: { x: 0.11, y: -0.09 } };
+  var TIRET = { w: 0.36, h: 0.095 };
+  var WONDER = {
+    duree: 3,
+    /** bascule du "?" autour du centre de la bulle, en degres, periode 1.5 s (divise 3) */
+    bascule: 8,
+    periode: 1.5,
+    /** roulis de la tete, en degres, ajoute au repos */
+    roulis: 10,
+    /**
+     * regard relatif au repos : vers le haut seulement. Un lacet de +4 avec le roulis et les
+     * yeux agrandis faisait sortir l'oeil du cercle (`skins.test.ts`, forme choisie = rien).
+     */
+    regard: { yaw: 0, pitch: 4 },
+    /** yeux un peu plus grands : on s'interroge */
+    oeil: { w: 1.05, h: 1.1 }
+  };
+  var OOPS = {
+    duree: 2.4,
+    minDuration: 1,
+    /** pic du surgissement : depassement PROPRE a cet etat, comme le ressort de `startle` */
+    pic: 1.15,
+    /** duree du surgissement, en secondes ; le pic est atteint a 70 % */
+    surgissement: 0.35,
+    /** secousse laterale, en rayon de boule, a 6 Hz, qui s'eteint avant 0.8 s */
+    secousse: 0.02,
+    frequence: 6,
+    fin: 0.8,
+    /** pupilles de choc, et regard leve de 4 degres de moins */
+    oeil: { w: 0.95, h: 1.05 },
+    regardPitch: -4
+  };
+  var BORED = {
+    duree: 3.6,
+    /** periode du flottement : 1.2 s divise 3.6 */
+    flottementPeriode: 1.2,
+    /** apparition de chaque point, en secondes ; chacun fond en `fondu` */
+    apparitions: [0.4, 1.2, 2],
+    fondu: 0.3,
+    /** les trois points s'effacent ensemble sur les 0.4 dernieres secondes : la boucle se referme */
+    effacement: 0.4,
+    /** soupir : le corps s'ecrase de 3 % en vertical, centre sur 2.4 s, sur 0.8 s */
+    soupir: { centre: 2.4, demi: 0.4, profondeur: 0.03 },
+    /** paupieres mi-closes */
+    ouverture: 0.55,
+    /** regard detourne : vers la gauche et vers le bas, relatif au repos */
+    regard: { yaw: -6, pitch: -6 }
+  };
+  var SLEEPY = {
+    duree: 2.4,
+    /** periode du flottement : 1.2 s divise 2.4 */
+    flottementPeriode: 1.2,
+    /** petit z : de 0 a 1.4 s ; grand Z : de 0.9 a 2.4 s ; chacun fond sur `fondu` */
+    petit: { debut: 0, fin: 1.4, de: { x: -0.16, y: 0.06 }, a: { x: -0.04, y: -0.03 }, h: 0.045 },
+    grand: { debut: 0.9, fin: 2.4, de: { x: 0.02, y: 0.05 }, a: { x: 0.16, y: -0.05 }, h: 0.085 },
+    fondu: 0.4,
+    /** respiration lente, sur sy : +-2 %, periode = duree */
+    respiration: 0.02,
+    /** paupieres presque closes, regard tombe de 10 degres */
+    ouverture: 0.12,
+    regardPitch: -10
+  };
+  var LAUGH = {
+    duree: 2,
+    /** periode du flottement : 1.0 s divise 2.0 */
+    flottementPeriode: 1,
+    /** rebond du glyphe, en rayon de boule, et du corps en plus, a 4 Hz (periode 0.25 divise 2.0) */
+    rebond: 0.03,
+    rebondCorps: 0.02,
+    frequence: 4
+  };
+  var LOVE = {
+    duree: 2,
+    /** periode du flottement : 1.0 s divise 2.0 */
+    flottementPeriode: 1,
+    /** pulsation 1 -> 1.12 a 1.5 Hz (periode 2/3 s, soit 3 cycles sur 2 s) */
+    pulsation: 0.12,
+    frequence: 1.5,
+    /** regard legerement vers le haut */
+    regardPitch: 2
+  };
+  var CHEER = {
+    duree: 2,
+    minDuration: 1,
+    /** saut du corps, en rayon de boule, pic a 0.4 s, retombe a 0.9 s */
+    saut: 0.06,
+    pic: 0.4,
+    retombee: 0.9,
+    /** le trait court se dessine de 0.15 a 0.35 s, le long de 0.35 a 0.65 s */
+    court: { debut: 0.15, duree: 0.2 },
+    long: { debut: 0.35, duree: 0.3 },
+    /** etincelles qui scintillent aux coins, de 0.6 a 1.0 s, pour etre eteintes au minDuration */
+    etincelles: { debut: 0.6, duree: 0.4, r: 0.03 }
+  };
+  function surgissementOops(t) {
+    const p = clamp(t / OOPS.surgissement);
+    if (p < 0.7) return OOPS.pic * easings.easeOutCubic(p / 0.7);
+    return OOPS.pic - (OOPS.pic - 1) * easings.easeInOutCubic((p - 0.7) / 0.3);
+  }
+  function sautCheer(t) {
+    if (t < CHEER.pic) return easings.easeOutCubic(t / CHEER.pic);
+    return 1 - easings.easeInOutCubic(clamp((t - CHEER.pic) / (CHEER.retombee - CHEER.pic)));
   }
   var STATES = [
     {
@@ -1085,6 +1378,449 @@ var Bloub = (() => {
           arcs: COMET_RIBBONS.map((s, i) => ({ id: `cm${i}`, seed: s, t, opacity: fade }))
         });
       }
+    },
+    // ---- etats choisis pour Alfred, hors catalogue, pas releves sur la video ----
+    {
+      id: "focus",
+      duration: 2.8,
+      morph: 0.45,
+      blinkIn: true,
+      baseFace: false,
+      baseBody: true,
+      pose: (t) => {
+        const w = TAU * t / 2.8;
+        const breath = Math.sin(w);
+        return base({
+          sil: circle(1, { sx: 1.02 - 8e-3 * breath, sy: 0.97 + 0.01 * breath }),
+          gaze: { yaw: REST_GAZE.yaw + 6 * Math.sin(w), pitch: REST_GAZE.pitch - 8, roll: -6 },
+          split: EYE_SPLIT,
+          // yeux plus hauts que plisses, inclinaisons en miroir de `triste` : froncement de concentration
+          eyes: [
+            { w: EYE_W, h: EYE_H * 0.62, open: 1, tilt: 8 },
+            { w: EYE_W, h: EYE_H * 0.62, open: 1, tilt: -8 }
+          ]
+        });
+      }
+    },
+    {
+      id: "nod",
+      duration: 0.6,
+      minDuration: 0.6,
+      morph: 0.2,
+      blinkIn: false,
+      baseFace: false,
+      baseBody: true,
+      pose: (t) => {
+        const k = Math.sin(Math.PI * clamp(t / 0.5));
+        return base({
+          sil: circle(1, { sx: 1 + 0.03 * k, sy: 1 - 0.06 * k, cy: 0.03 * k }),
+          // le regard descend : tangage negatif, sens verifie (positif = vers le haut)
+          gaze: __spreadProps(__spreadValues({}, REST_GAZE), { pitch: REST_GAZE.pitch - 10 * k })
+        });
+      }
+    },
+    {
+      id: "startle",
+      duration: 0.9,
+      minDuration: 0.9,
+      morph: 0.12,
+      blinkIn: false,
+      baseFace: false,
+      baseBody: true,
+      pose: (t) => {
+        const c = easings.easeOutCubic(clamp((t - 0.12) / 0.18));
+        const u = t - 0.3;
+        const d = Math.exp(-6 * u) * Math.cos(TAU * 2.2 * u);
+        const sq = t < 0.3 ? c : d;
+        const eyeK = t < 0.45 ? c : 1 - easings.easeOutCubic(clamp((t - 0.45) / 0.45));
+        return base({
+          // squash modere (sy 0.92 au pic) : la boule ne doit pas s'ecraser davantage
+          sil: circle(1, { sx: 1 + 0.05 * sq, sy: 1 - 0.08 * sq, cy: 0.03 * sq }),
+          // regard baisse (-6 au pic) : le regard vers le haut, avec yeux ecarquilles,
+          // sortait de la boule dans la sweep de confinement (cf. les commentaires du recap)
+          gaze: __spreadProps(__spreadValues({}, REST_GAZE), { pitch: REST_GAZE.pitch - 6 * c }),
+          eyes: pairOpen(lerp(EYE_W, EYE_W * 0.95, eyeK), lerp(EYE_H, EYE_W * 1.05, eyeK), 1)
+        });
+      }
+    },
+    {
+      id: "curious",
+      duration: 2.4,
+      morph: 0.5,
+      blinkIn: true,
+      baseFace: false,
+      baseBody: true,
+      pose: (t) => {
+        const roll = 12 + 3 * Math.sin(TAU * t / 2.4);
+        return base({
+          sil: circle(1, { rot: roll * Math.PI / 180 * 0.5 }),
+          offX: 0.04,
+          // regard absolu, pas releve : un regard vers le haut ferait sortir les yeux de la
+          // marge du cercle et casserait `cercle == rien` (cf. skins.test.ts)
+          gaze: { yaw: 10, pitch: -6, roll },
+          // un oeil un peu plus grand que l'autre : on regarde de biais
+          eyes: [
+            { w: EYE_W, h: EYE_H * 1.1, open: 1 },
+            { w: EYE_W * 1.15, h: EYE_H * 1.3, open: 1 }
+          ]
+        });
+      }
+    },
+    {
+      id: "hop",
+      duration: 1.6,
+      minDuration: 1.4,
+      morph: 0.35,
+      blinkIn: false,
+      baseFace: false,
+      baseBody: true,
+      pose: (t) => {
+        var _a, _b;
+        const saut = (_b = (_a = hopPhase(t, 0, 0.6, 0.18)) != null ? _a : hopPhase(t, 0.65, 0.6, 0.1)) != null ? _b : REPOS_SAUT;
+        const m = Math.min(
+          easings.easeOutCubic(clamp(t / 0.12)),
+          1 - easings.easeOutCubic(clamp((t - 1.25) / 0.15))
+        );
+        return base({
+          sil: circle(1, { sx: saut.sx, sy: saut.sy }),
+          offY: saut.offY,
+          gaze: __spreadProps(__spreadValues({}, REST_GAZE), { pitch: REST_GAZE.pitch + HOP_PITCH }),
+          eyes: pairOpen(lerp(EYE_W, 0.36, m), lerp(EYE_H, 0.095, m), 1)
+        });
+      }
+    },
+    {
+      id: "relieved",
+      duration: 1.8,
+      minDuration: 1.6,
+      morph: 0.45,
+      blinkIn: false,
+      baseFace: false,
+      baseBody: true,
+      pose: (t) => {
+        let echelle;
+        let cy = 0;
+        if (t < 0.6) {
+          echelle = 1 + 0.06 * easings.easeInOutCubic(t / 0.6);
+        } else if (t < 1.4) {
+          const e = easings.easeInOutCubic((t - 0.6) / 0.8);
+          echelle = lerp(1.06, 0.96, e);
+          cy = 0.03 * e;
+        } else {
+          const s = easings.easeOutCubic(clamp((t - 1.4) / 0.2));
+          echelle = lerp(0.96, 1, s);
+          cy = 0.03 * (1 - s);
+        }
+        const ouvert = t < 0.5 ? 1 : t < 0.7 ? 1 - (t - 0.5) / 0.2 : t < 1.2 ? 0 : t < 1.5 ? (t - 1.2) / 0.3 : 1;
+        return base({
+          sil: circle(1, { sx: echelle, sy: echelle, cy }),
+          // regard qui tombe legerement : un regard vers le haut depasserait la boule
+          gaze: __spreadProps(__spreadValues({}, REST_GAZE), { pitch: REST_GAZE.pitch - 6 }),
+          eyes: pairOpen(EYE_W, EYE_H, ouvert)
+        });
+      }
+    },
+    {
+      id: "down",
+      duration: 3,
+      morph: 0.6,
+      blinkIn: true,
+      baseFace: false,
+      baseBody: true,
+      pose: (t) => {
+        const breath = Math.sin(TAU * t / 3);
+        return base({
+          sil: circle(1, { sx: 1.05, sy: 0.92 + 0.01 * breath, cy: 0.06 }),
+          // regard vers le bas : valeur absolue, tangage negatif
+          gaze: { yaw: REST_GAZE.yaw - 6, pitch: -22, roll: -4 },
+          // tristesse : inclinaisons en miroir, meme signe que `triste` (oeil interieur -28)
+          eyes: [
+            { w: EYE_W * 0.95, h: EYE_H * 0.8, open: 1, tilt: -12 },
+            { w: EYE_W * 0.95, h: EYE_H * 0.8, open: 1, tilt: 12 }
+          ]
+        });
+      }
+    },
+    {
+      id: "drowsy",
+      duration: 3.2,
+      morph: 0.6,
+      blinkIn: false,
+      baseFace: false,
+      baseBody: true,
+      pose: (t) => {
+        const breath = Math.sin(TAU * t / 3.2);
+        const lent = t >= 1.8 && t <= 2.6 ? 0.4 * Math.sin(Math.PI * (t - 1.8) / 0.8) : 0;
+        return base({
+          sil: circle(1, { sx: DROWSY_SX, sy: DROWSY_SY + 0.015 * breath, cy: DROWSY_CY }),
+          eyes: pairOpen(EYE_W, EYE_H, DROWSY_OPEN - lent),
+          gaze: {
+            yaw: REST_GAZE.yaw,
+            pitch: REST_GAZE.pitch - DROWSY_PITCH_DROP,
+            roll: DROWSY_ROLL + 6 * Math.sin(TAU * t / 3.2)
+          }
+        });
+      }
+    },
+    {
+      id: "yawn",
+      duration: 2,
+      minDuration: 1.6,
+      morph: 0.45,
+      blinkIn: false,
+      baseFace: false,
+      baseBody: true,
+      pose: (t) => {
+        const etire = easings.easeInOutCubic(clamp(t / 0.8));
+        const retour = easings.easeInOutCubic(clamp((t - 1.1) / 0.5));
+        const avant = t < 1.1;
+        return base({
+          sil: circle(1, {
+            sx: avant ? lerp(1, 0.94, etire) : lerp(0.94, DROWSY_SX, retour),
+            sy: avant ? lerp(1, 1.12, etire) : lerp(1.12, DROWSY_SY, retour),
+            cy: avant ? 0 : lerp(0, DROWSY_CY, retour)
+          }),
+          eyes: pairOpen(
+            EYE_W,
+            EYE_H,
+            avant ? lerp(1, 0.1, easings.easeInOutCubic(clamp(t / 0.5))) : lerp(0.1, DROWSY_OPEN, retour)
+          ),
+          gaze: {
+            yaw: REST_GAZE.yaw,
+            pitch: REST_GAZE.pitch - DROWSY_PITCH_DROP * retour,
+            roll: DROWSY_ROLL
+          }
+        });
+      }
+    },
+    {
+      id: "travel",
+      duration: 1,
+      morph: 0.15,
+      blinkIn: true,
+      // en vol le corps est toujours une boule etiree, quel que soit l'etat d'origine
+      baseFace: false,
+      baseBody: false,
+      pose: () => base({
+        sil: circle(1, { sx: 0.95, sy: 1.06 }),
+        gaze: __spreadValues({}, REST_GAZE),
+        eyes: pair2(EYE_W, EYE_H)
+      })
+    },
+    {
+      id: "ponder",
+      duration: PONDER.duree,
+      morph: 0.45,
+      blinkIn: true,
+      baseFace: false,
+      baseBody: true,
+      pose: (t) => {
+        const w = TAU * t / PONDER.duree;
+        return base(__spreadProps(__spreadValues({}, bulleScene(t, {
+          duree: PONDER.duree,
+          // les trois points pulsent comme `thinking` : meme onde, meme periode de 1.5 s
+          glyphe: (u) => [0, 1, 2].map((i) => {
+            const k = dotPulse(u, i);
+            return point(
+              { x: (i - 1) * PONDER.point.ecart, y: 0 },
+              PONDER.point.r * (1 + PONDER.point.gonflement * k),
+              repere(),
+              0.5 + 0.5 * k
+            );
+          })
+        })), {
+          gaze: {
+            yaw: REST_GAZE.yaw + PONDER.regard.yaw + PONDER.balancement * Math.sin(w),
+            pitch: REST_GAZE.pitch + PONDER.regard.pitch,
+            roll: PONDER.regard.roll
+          },
+          eyes: pair2(EYE_W, EYE_H)
+        }));
+      }
+    },
+    // ---- sentiments en bulle : memes regles que `ponder`, seul le dessin change ----
+    {
+      id: "wonder",
+      duration: WONDER.duree,
+      morph: 0.45,
+      blinkIn: true,
+      baseFace: false,
+      baseBody: true,
+      pose: (t) => {
+        const bascule = rad(WONDER.bascule) * Math.sin(TAU * t / WONDER.periode);
+        return base(__spreadProps(__spreadValues({}, bulleScene(t, {
+          duree: WONDER.duree,
+          flottementPeriode: WONDER.periode,
+          glyphe: () => dessinQuestion(repere(1, bascule))
+        })), {
+          gaze: {
+            yaw: REST_GAZE.yaw + WONDER.regard.yaw,
+            pitch: REST_GAZE.pitch + WONDER.regard.pitch,
+            // inclinaison de la tete : dix degres de plus que le repos
+            roll: REST_GAZE.roll + WONDER.roulis
+          },
+          eyes: pair2(EYE_W * WONDER.oeil.w, EYE_H * WONDER.oeil.h)
+        }));
+      }
+    },
+    {
+      id: "oops",
+      duration: OOPS.duree,
+      minDuration: OOPS.minDuration,
+      morph: 0.45,
+      blinkIn: true,
+      baseFace: false,
+      baseBody: true,
+      pose: (t) => {
+        const pop = surgissementOops(t);
+        const secousse = t < OOPS.surgissement ? 0 : OOPS.secousse * clamp((OOPS.fin - t) / (OOPS.fin - OOPS.surgissement)) * Math.sin(TAU * OOPS.frequence * (t - OOPS.surgissement));
+        return base(__spreadProps(__spreadValues({}, bulleScene(t, {
+          duree: OOPS.duree,
+          glyphe: () => dessinExclamation(repere(pop, 0, secousse))
+        })), {
+          gaze: __spreadProps(__spreadValues({}, REST_GAZE), { pitch: REST_GAZE.pitch + OOPS.regardPitch }),
+          eyes: pair2(EYE_W * OOPS.oeil.w, EYE_W * OOPS.oeil.h)
+        }));
+      }
+    },
+    {
+      id: "bored",
+      duration: BORED.duree,
+      morph: 0.45,
+      blinkIn: true,
+      baseFace: false,
+      baseBody: true,
+      pose: (t) => {
+        const u = clamp((t - (BORED.soupir.centre - BORED.soupir.demi)) / (2 * BORED.soupir.demi));
+        const soupir = 1 - BORED.soupir.profondeur * Math.sin(Math.PI * u);
+        const effacement = clamp((BORED.duree - t) / BORED.effacement);
+        const scene = bulleScene(t, {
+          duree: BORED.duree,
+          flottementPeriode: BORED.flottementPeriode,
+          glyphe: () => dessinTrois(
+            repere(),
+            BORED.apparitions.map((debut) => clamp((t - debut) / BORED.fondu) * effacement)
+          )
+        });
+        return base(__spreadProps(__spreadValues({}, scene), {
+          sil: __spreadProps(__spreadValues({}, scene.sil), { sy: scene.sil.sy * soupir }),
+          gaze: {
+            yaw: REST_GAZE.yaw + BORED.regard.yaw,
+            pitch: REST_GAZE.pitch + BORED.regard.pitch,
+            roll: REST_GAZE.roll
+          },
+          eyes: pairOpen(EYE_W, EYE_H, BORED.ouverture)
+        }));
+      }
+    },
+    {
+      id: "sleepy",
+      duration: SLEEPY.duree,
+      morph: 0.45,
+      blinkIn: true,
+      baseFace: false,
+      baseBody: true,
+      pose: (t) => {
+        const respire = 1 + SLEEPY.respiration * Math.sin(TAU * t / SLEEPY.duree);
+        const { petit, grand } = SLEEPY;
+        const vie = (z) => {
+          const u = clamp((t - z.debut) / (z.fin - z.debut));
+          const opacite = clamp((t - z.debut) / SLEEPY.fondu) * clamp((z.fin - t) / SLEEPY.fondu);
+          return {
+            x: lerp(z.de.x, z.a.x, u),
+            y: lerp(z.de.y, z.a.y, u),
+            opacite
+          };
+        };
+        const p = vie(petit);
+        const g = vie(grand);
+        const scene = bulleScene(t, {
+          duree: SLEEPY.duree,
+          flottementPeriode: SLEEPY.flottementPeriode,
+          glyphe: () => [
+            ...dessinZ(p.x, p.y, petit.h, repere(), p.opacite),
+            ...dessinZ(g.x, g.y, grand.h, repere(), g.opacite)
+          ]
+        });
+        return base(__spreadProps(__spreadValues({}, scene), {
+          sil: __spreadProps(__spreadValues({}, scene.sil), { sy: scene.sil.sy * respire }),
+          gaze: __spreadProps(__spreadValues({}, REST_GAZE), { pitch: REST_GAZE.pitch + SLEEPY.regardPitch }),
+          eyes: pairOpen(EYE_W, EYE_H, SLEEPY.ouverture)
+        }));
+      }
+    },
+    {
+      id: "laugh",
+      duration: LAUGH.duree,
+      morph: 0.45,
+      blinkIn: true,
+      baseFace: false,
+      baseBody: true,
+      pose: (t) => {
+        const rebond = Math.sin(TAU * LAUGH.frequence * t);
+        const scene = bulleScene(t, {
+          duree: LAUGH.duree,
+          flottementPeriode: LAUGH.flottementPeriode,
+          glyphe: () => dessinChevrons(repere(1, 0, 0, LAUGH.rebond * rebond))
+        });
+        return base(__spreadProps(__spreadValues({}, scene), {
+          offY: scene.offY + LAUGH.rebondCorps * rebond,
+          gaze: __spreadValues({}, REST_GAZE),
+          eyes: pairOpen(TIRET.w, TIRET.h, 1)
+        }));
+      }
+    },
+    {
+      id: "love",
+      duration: LOVE.duree,
+      morph: 0.45,
+      blinkIn: true,
+      baseFace: false,
+      baseBody: true,
+      pose: (t) => {
+        const battement = 0.5 - 0.5 * Math.cos(TAU * LOVE.frequence * t);
+        const echelle = 1 + LOVE.pulsation * battement;
+        return base(__spreadProps(__spreadValues({}, bulleScene(t, {
+          duree: LOVE.duree,
+          flottementPeriode: LOVE.flottementPeriode,
+          glyphe: () => dessinCoeur(repere(echelle))
+        })), {
+          gaze: __spreadProps(__spreadValues({}, REST_GAZE), { pitch: REST_GAZE.pitch + LOVE.regardPitch }),
+          eyes: pairOpen(TIRET.w, TIRET.h, 1)
+        }));
+      }
+    },
+    {
+      id: "cheer",
+      duration: CHEER.duree,
+      minDuration: CHEER.minDuration,
+      morph: 0.45,
+      blinkIn: true,
+      baseFace: false,
+      baseBody: true,
+      pose: (t) => {
+        const pc = easings.easeOutCubic(clamp((t - CHEER.court.debut) / CHEER.court.duree));
+        const pl = easings.easeOutCubic(clamp((t - CHEER.long.debut) / CHEER.long.duree));
+        const { a, b, c } = COCHE;
+        const bout = { x: b.x + (c.x - b.x) * pl, y: b.y + (c.y - b.y) * pl };
+        const milieu = { x: a.x + (b.x - a.x) * pc, y: a.y + (b.y - a.y) * pc };
+        const scin = clamp((t - CHEER.etincelles.debut) / CHEER.etincelles.duree);
+        const scintille = Math.sin(Math.PI * scin);
+        const scene = bulleScene(t, {
+          duree: CHEER.duree,
+          glyphe: () => [
+            trait(a, milieu, TRAIT, repere(), clamp((t - CHEER.court.debut) / 0.02)),
+            trait(b, bout, TRAIT, repere(), clamp((t - CHEER.long.debut) / 0.02)),
+            point({ x: 0.25, y: -0.12 }, CHEER.etincelles.r, repere(), scintille),
+            point({ x: -0.25, y: 0.1 }, CHEER.etincelles.r, repere(), scintille)
+          ]
+        });
+        return base(__spreadProps(__spreadValues({}, scene), {
+          offY: scene.offY - CHEER.saut * sautCheer(t),
+          gaze: __spreadValues({}, REST_GAZE),
+          eyes: pairOpen(TIRET.w, TIRET.h, 1)
+        }));
+      }
     }
   ];
   var STATE_BY_ID = new Map(STATES.map((s) => [s.id, s]));
@@ -1110,15 +1846,16 @@ var Bloub = (() => {
       const ay = e.b * cp + e.d * sp;
       const cx = -e.a * sp + e.c * cp;
       const cy = -e.b * sp + e.d * cp;
-      const hw = Math.max(cfg.w * R, 0.01) / 2;
-      const hh = Math.max(cfg.h * R, 0.01) / 2;
+      const k = visage.eyeScale;
+      const hw = Math.max(cfg.w * R * k, 0.01) / 2;
+      const hh = Math.max(cfg.h * R * k, 0.01) / 2;
       const r = Math.min(hw, hh);
       const long = hh > hw;
       const demi = long ? hh - r : hw - r;
       const fit = radiusAtAngle(radii, Math.atan2(e.y, e.x) - sil.rot);
       out.push({
-        x: e.x * fit,
-        y: e.y * fit,
+        x: e.x * fit * k,
+        y: e.y * fit * k,
         ax: (long ? cx : ax) * demi,
         ay: (long ? cy : ay) * demi,
         r,
@@ -1233,11 +1970,22 @@ var Bloub = (() => {
     return { x: +(x / R).toFixed(6), y: +(y / R).toFixed(6) };
   }
   function visageDe(def, pose, expr) {
-    if (def.baseFace && expr) return { gaze: expr.gaze, split: expr.split, eyes: expr.eyes };
-    return { gaze: pose.gaze, split: pose.split, eyes: pose.eyes };
+    if (def.baseFace && expr)
+      return { gaze: expr.gaze, split: expr.split, eyes: expr.eyes, eyeScale: pose.eyeScale };
+    return { gaze: pose.gaze, split: pose.split, eyes: pose.eyes, eyeScale: pose.eyeScale };
   }
   function dates(def) {
-    const signature = (p) => JSON.stringify([p.gaze, p.split, p.eyes, p.sil.rot, p.sil.cx, p.sil.cy, p.sil.sx, p.sil.sy]);
+    const signature = (p) => JSON.stringify([
+      p.gaze,
+      p.split,
+      p.eyes,
+      p.eyeScale,
+      p.sil.rot,
+      p.sil.cx,
+      p.sil.cy,
+      p.sil.sx,
+      p.sil.sy
+    ]);
     if (signature(def.pose(0)) === signature(def.pose(def.duration))) return [0];
     const n = 3;
     return Array.from({ length: n }, (_, i) => i / (n - 1) * def.duration);
@@ -1272,17 +2020,17 @@ var Bloub = (() => {
   var clef = (state, expr) => `${state}|${expr != null ? expr : ""}`;
   function batir() {
     return new Map(
-      SHAPES.map((forme) => {
+      SHAPES.map((forme2) => {
         var _a;
         const par = /* @__PURE__ */ new Map();
         for (const def of STATES) {
           if (!def.baseBody) continue;
           const expressions = def.baseFace ? [null, ...EXPRESSIONS] : [null];
           for (const expr of expressions) {
-            par.set(clef(def.id, (_a = expr == null ? void 0 : expr.id) != null ? _a : null), decalagePour(def, forme.radii, expr));
+            par.set(clef(def.id, (_a = expr == null ? void 0 : expr.id) != null ? _a : null), decalagePour(def, forme2.radii, expr));
           }
         }
-        return [forme.radii, par];
+        return [forme2.radii, par];
       })
     );
   }
@@ -1327,6 +2075,7 @@ var Bloub = (() => {
       split: lerp(a.split, b.split, t),
       eyes: [lerpEye(a.eyes[0], b.eyes[0], t), lerpEye(a.eyes[1], b.eyes[1], t)],
       eyeAlpha: lerp(a.eyeAlpha, b.eyeAlpha, t),
+      eyeScale: lerp(a.eyeScale, b.eyeScale, t),
       bodyAlpha: lerp(a.bodyAlpha, b.bodyAlpha, t),
       dots: [
         ...a.dots.map((d) => __spreadProps(__spreadValues({}, d), { opacity: d.opacity * out })),
@@ -1631,6 +2380,7 @@ var Bloub = (() => {
           const e = poses[i];
           if (e.depth <= 0.02) continue;
           const cfg = pose.eyes[i];
+          const eyeK = pose.eyeScale;
           const fit = bodyRadius(e.x, e.y);
           const phi = ((_a = cfg.tilt) != null ? _a : 0) * Math.PI / 180;
           const cp = Math.cos(phi);
@@ -1640,9 +2390,11 @@ var Bloub = (() => {
           const cx2 = -e.a * sp + e.c * cp;
           const cy2 = -e.b * sp + e.d * cp;
           const k = blinkScale(Math.min(lid, cfg.open));
+          const tx = e.x * fit * eyeK + (offX + decalage.x) * R2;
+          const ty = e.y * fit * eyeK + (offY + decalage.y) * R2;
           eyes.push({
-            d: capsulePath(cfg.w * R2, cfg.h * R2),
-            matrix: `matrix(${r2(ax)},${r2(ay * k)},${r2(cx2)},${r2(cy2 * k)},${r2(e.x * fit + (offX + decalage.x) * R2)},${r2(e.y * fit + (offY + decalage.y) * R2)})`,
+            d: capsulePath(cfg.w * R2 * eyeK, cfg.h * R2 * eyeK),
+            matrix: `matrix(${r2(ax)},${r2(ay * k)},${r2(cx2)},${r2(cy2 * k)},${r2(tx)},${r2(ty)})`,
             alpha: pose.eyeAlpha * clamp(e.depth / 0.12)
           });
         }
@@ -1732,59 +2484,107 @@ var Bloub = (() => {
       { state: "egg", duration: 1.8 },
       { state: "idle", duration: 2.2 }
     ],
-    // Hand-built only. The director does not schedule these.
-    // Comet recomposes at 2.45; the last 0.05s finishes in the next fade.
-    start: [{ state: "comet", duration: 2.4 }],
-    // Wind-up, then the bouquet. Its opacity hits 0 at t = 2.2.
-    startWork: [
-      { state: "idle", duration: 1 },
-      { state: "play", duration: 2.2 }
-    ],
-    // Dots are the hero. A full wide, then a wink, so the return to the
-    // dots has a look in between. Re-entering thinking replays the emerge.
-    // Loop 10.2s.
+    // Activity while a turn runs. Focus is the work pose; one wide breaks it
+    // up. No wink: winking while working reads as flippant. Loop 13.0s.
     working: [
-      { state: "thinking", duration: 4.2 },
-      { state: "wide", duration: 1.8 },
+      { state: "focus", duration: 2.8 },
+      { state: "focus", duration: 2.8 },
       { state: "idle", duration: 1.4 },
-      { state: "wink", duration: 1.6 },
-      { state: "idle", duration: 1.2 }
+      { state: "focus", duration: 2.8 },
+      { state: "wide", duration: 1 }
     ],
-    // Open eyes, then the mark for its measured hold. The next wide, on the
-    // repeat, is the recovery. 2.9s, played three times.
+    // Before the first text: a speech bubble with three dots above the bloub.
+    reasoning: [{ state: "ponder", duration: 3 }],
+    // Text is arriving: a small nod at each beat of the reply.
+    speaking: [
+      { state: "idle", duration: 2.2 },
+      { state: "nod", duration: 0.6 },
+      { state: "idle", duration: 1.8 },
+      { state: "curious", duration: 1.2 },
+      { state: "nod", duration: 0.6 }
+    ],
+    // The mic is open: a lean in, then a wide ack. Idle is a short rest.
+    listening: [
+      { state: "curious", duration: 2.4 },
+      { state: "curious", duration: 2.4 },
+      { state: "idle", duration: 1.4 },
+      { state: "wide", duration: 1.4 }
+    ],
+    // One bow after a finished turn, played once. The hop lands, the check settles.
+    success: [
+      { state: "hop", duration: 1.6 },
+      { state: "cheer", duration: 2 }
+    ],
+    // A success after a rough streak: a relieved breath, then the check.
+    relief: [
+      { state: "relieved", duration: 1.8 },
+      { state: "cheer", duration: 2 }
+    ],
+    // A startle, then the mark. The mood layer carries the after-effect.
     error: [
-      { state: "wide", duration: 0.9 },
-      { state: "exclaim", duration: 2 }
+      { state: "startle", duration: 0.9 },
+      { state: "oops", duration: 2.4 }
     ],
-    // Look, then the full travel: out over 1.5s, back by 2.0, a 0.4s settle.
-    // 3.3s, played three times.
-    attention: [
-      { state: "wide", duration: 0.9 },
-      { state: "alert", duration: 2.4 }
+    // Waiting on the user: one wonder beat when the wait starts, then the same
+    // question held (waiting) until the mood moves on. A pending question keeps asking.
+    attention: [{ state: "wonder", duration: 3 }],
+    waiting: [{ state: "wonder", duration: 3 }],
+    // Looks. Consecutive glances alternate between these two (see glanceSeg).
+    glance: [{ state: "wide", duration: 1.1 }],
+    glanceSoft: [{ state: "curious", duration: 1.2 }],
+    // Long idle: one yawn, then the drowsy loop (drowsyLoop2 below).
+    tired: [{ state: "yawn", duration: 2 }],
+    // Loop 8.0s. The yawn ends on drowsy's first pose; the nod-off is sleepy.
+    drowsyLoop2: [
+      { state: "drowsy", duration: 3.2 },
+      { state: "sleepy", duration: 2.4 },
+      { state: "sleepy", duration: 2.4 }
     ],
-    // One bow. Rings enter over 0.8s, the body has relaxed by 2.5s, and at
-    // 3.4s the rings are nearly gone (their fade ends at 3.6). Played once:
-    // repeating a finished scene reads as a stuck loop.
-    success: [{ state: "orbit", duration: 3.4 }],
+    // Idle for a while (past BORED_AFTER): a glance, a bored sigh, a settle.
+    boredIdle: [
+      { state: "idle", duration: 2.4 },
+      { state: "bored", duration: 3.6 },
+      { state: "idle", duration: 2 }
+    ],
+    // Standby: the bloub dozes with a slow 'z Z'.
+    asleep: [{ state: "sleepy", duration: 2.4 }],
+    // Low valence: the face hangs, with a short settle.
+    downIdle: [
+      { state: "down", duration: 3 },
+      { state: "down", duration: 3 },
+      { state: "idle", duration: 1.8 }
+    ],
+    // High valence: a brighter coda with a wink and a hop.
+    brightIdle: [
+      { state: "idle", duration: 2.2 },
+      { state: "wink", duration: 1.6 },
+      { state: "idle", duration: 1.8 },
+      { state: "hop", duration: 1.6 },
+      { state: "idle", duration: 1.6 }
+    ],
+    // The hero in flight between the bar icon and the pill. The travel body
+    // is a loop; the blink on entry hides the morph.
+    travel: [{ state: "travel", duration: 1 }],
+    // Reaction clips. Each one lands on top of the running cycle, then the
+    // cycle resumes.
+    tapTool: [{ state: "nod", duration: 0.6 }],
+    ouch: [{ state: "startle", duration: 0.9 }],
+    perk: [{ state: "curious", duration: 1.2 }],
+    // A click: a short surprised look. Plays over an idle or notification run.
+    poke: [{ state: "wide", duration: 0.6 }],
+    // The assistant asked something: a wonder beat.
+    question: [{ state: "wonder", duration: 2.4 }],
+    // The reply laughed, or the user thanked: a chevron laugh, a heart.
+    laugh: [{ state: "laugh", duration: 2 }],
+    love: [{ state: "love", duration: 2 }],
+    // A pondering beat with no kind mapped to it yet.
+    think: [{ state: "ponder", duration: 3 }],
     // The badge is the signal. One block never re-enters, so the pop plays
     // on the way in and the pill holds. Another state would drop the badge.
     notification: [{ state: "notify", duration: 2.2 }],
     // Collapse, hold, regrow (done at 2.4). The extra 0.2s is the face back
     // before the morph into rest.
-    end: [{ state: "burst", duration: 2.6 }],
-    // Attentive expression only survives on idle (other states bring their
-    // own face). A look, a lean, a small ack. Idle is 5.6 of 10.4s.
-    listening: [
-      { state: "idle", duration: 2.4 },
-      { state: "wide", duration: 1.4 },
-      { state: "idle", duration: 1.4 },
-      { state: "egg", duration: 1.8 },
-      { state: "idle", duration: 1.8 },
-      { state: "wink", duration: 1.6 }
-    ],
-    // One look, then the next pose. Wide's morph is 0.55s; the rest is the
-    // face arriving so a cut does not read as a pop. Not a loop.
-    glance: [{ state: "wide", duration: 1.1 }]
+    end: [{ state: "burst", duration: 2.6 }]
   };
   var SHAPE_ALIAS = {
     circle: "cercle",
@@ -1828,21 +2628,47 @@ var Bloub = (() => {
     idle: "idle",
     busy: "working",
     working: "working",
+    reasoning: "reasoning",
+    speaking: "speaking",
     listening: "listening",
     attention: "attention",
     error: "error",
     success: "success",
     permission: "attention"
   };
+  var ACTIVITY = {
+    busy: "working",
+    working: "working",
+    reasoning: "reasoning",
+    speaking: "speaking"
+  };
+  function isActivity(mood) {
+    return Object.prototype.hasOwnProperty.call(ACTIVITY, mood);
+  }
+  function isActive(mood) {
+    return isActivity(mood) || mood === "listening" || mood === "attention" || mood === "permission";
+  }
+  var RESTING = ["idle", "success", "error"];
   var OUTCOME_CLIP = {
     success: "success",
     error: "error",
     permission: "attention",
     attention: "attention"
   };
-  function beatsOf(clip) {
-    return clip === "success" ? 1 : 3;
-  }
+  var PROTECTED = ["end", "success", "relief", "error", "attention", "travel", "tired"];
+  var ENTER_PROTECTED = ["end"];
+  var REST_ENERGY = 0.8;
+  var REST_VALENCE = 0;
+  var MOOD_TAU = 240;
+  var BUSY_DRAIN_PER_MIN = 0.02;
+  var BORED_AFTER = 120;
+  var TIRED_AFTER = 300;
+  var SLEEP_AFTER = 600;
+  var LOW_ENERGY = 0.3;
+  var SAD = -0.4;
+  var HAPPY = 0.4;
+  var FLIGHT_GAZE_MORPH = 0.12;
+  var HANDBACK_MORPH = 0.25;
   var players = /* @__PURE__ */ new Map();
   var directors = /* @__PURE__ */ new Map();
   var timelineSerial = 0;
@@ -1878,37 +2704,124 @@ var Bloub = (() => {
     if (clock < tl.onceEnd) {
       for (let i = tl.once.length - 1; i >= 0; i--) {
         const b = tl.once[i];
-        if (clock >= b.at || i === 0) return { state: b.state, at: b.at, clip: b.clip, index: i };
+        if (clock >= b.at || i === 0) {
+          return { state: b.state, at: b.at, end: b.at + b.duration, clip: b.clip, index: i };
+        }
       }
     }
     const placed = blockAt(tl.loop, clock - tl.onceEnd);
+    const block = tl.loop[placed.index];
+    const at = clock - placed.elapsed;
     return {
-      state: tl.loop[placed.index].state,
-      at: clock - placed.elapsed,
+      state: block.state,
+      at,
+      end: at + block.duration,
       clip: tl.loopClip,
       index: tl.once.length + placed.index
     };
   }
-  function runningPrefix(tl, clock, clips) {
-    if (clock >= tl.onceEnd) return [];
+  function pendingScene(tl, clock, clips) {
+    let end = -1;
+    for (let i = 0; i < tl.once.length; i++) {
+      const b = tl.once[i];
+      if (clips.indexOf(b.clip) >= 0 && b.at + b.duration > clock) end = i;
+    }
+    if (end < 0) return [];
+    let start = end;
+    while (start > 0 && tl.once[start - 1].at + tl.once[start - 1].duration > clock) start--;
+    return tl.once.slice(start, end + 1);
+  }
+  function heldBlock(tl, clock) {
+    var _a, _b;
     const placed = place(tl, clock);
-    if (clips.indexOf(placed.clip) < 0) return [];
-    let i = placed.index;
-    while (i > 0 && tl.once[i - 1].clip === placed.clip) i--;
-    let j = placed.index;
-    while (j + 1 < tl.once.length && tl.once[j + 1].clip === placed.clip) j++;
-    return tl.once.slice(i, j + 1);
+    const min = (_b = (_a = STATE_BY_ID.get(placed.state)) == null ? void 0 : _a.minDuration) != null ? _b : 0;
+    if (clock - placed.at >= min) return [];
+    return [{ state: placed.state, at: placed.at, duration: min, clip: placed.clip }];
   }
-  function restCycle(mood, idleVariant) {
+  function queueOf(tl, clock, clips) {
+    const run = pendingScene(tl, clock, clips);
+    return run.length ? run : heldBlock(tl, clock);
+  }
+  function boundaryOf(tl, clock) {
+    const placed = place(tl, clock);
+    return [{ state: placed.state, at: placed.at, duration: placed.end - placed.at, clip: placed.clip }];
+  }
+  function clamp2(v, lo, hi) {
+    return v < lo ? lo : v > hi ? hi : v;
+  }
+  function newDirector(clock, compact, mood, timeline, idleVariant) {
+    return {
+      timeline,
+      compact,
+      mood,
+      latched: "",
+      seen: clock,
+      idleVariant,
+      energy: REST_ENERGY,
+      valence: REST_VALENCE,
+      lastAt: clock,
+      lastActiveAt: clock,
+      glances: 0,
+      nextCheck: clock + 1,
+      reactedAt: {}
+    };
+  }
+  function firstCycle(mood, idleVariant) {
     if (mood === "listening") return "listening";
-    if (mood === "busy" || mood === "working") return "working";
+    if (mood === "attention" || mood === "permission") return "waiting";
+    if (isActivity(mood)) return ACTIVITY[mood];
     return cycleKeyOf("idle", idleVariant);
   }
-  function tailOf(d, idleVariant) {
-    if (d.mood === "listening") return "listening";
-    if (d.mood === "busy" || d.mood === "working") return "working";
-    if (d.latched) return "notification";
+  function glanceSeg(d) {
+    d.glances += 1;
+    return { cycle: d.glances % 2 === 1 ? "glance" : "glanceSoft" };
+  }
+  function sleeping(d) {
+    return d.timeline.loopClip === "asleep" || d.timeline.loopClip === "drowsyLoop2";
+  }
+  function wakeSeq(d) {
+    return sleeping(d) ? [glanceSeg(d)] : [];
+  }
+  function idleKey(d, idleVariant, clock) {
+    const idleFor = clock - d.lastActiveAt;
+    if (idleFor > SLEEP_AFTER) return "asleep";
+    if (idleFor > TIRED_AFTER || d.energy < LOW_ENERGY) return "drowsyLoop2";
+    if (idleFor > BORED_AFTER) return "boredIdle";
+    if (d.valence < SAD) return "downIdle";
+    if (d.valence > HAPPY) return "brightIdle";
     return cycleKeyOf("idle", idleVariant);
+  }
+  function restKey(d, idleVariant, clock) {
+    if (d.mood === "listening") return "listening";
+    if (isActivity(d.mood)) return ACTIVITY[d.mood];
+    if (d.latched) return "notification";
+    if (d.mood === "attention" || d.mood === "permission") return "waiting";
+    return idleKey(d, idleVariant, clock);
+  }
+  function restSeg(d, idleVariant, clock) {
+    const key = restKey(d, idleVariant, clock);
+    if (key === "drowsyLoop2" && d.timeline.loopClip !== "drowsyLoop2") {
+      return [{ cycle: "tired" }, { cycle: key }];
+    }
+    return [{ cycle: key }];
+  }
+  function outcomeClip(d, mood) {
+    if (mood === "success") return d.valence < -0.2 ? "relief" : "success";
+    return OUTCOME_CLIP[mood] || "";
+  }
+  function applyMoodEvent(d, mood) {
+    if (mood === "success") {
+      d.valence = clamp2(d.valence + 0.35, -1, 1);
+      d.energy = clamp2(d.energy + 0.1, 0, 1);
+    } else if (mood === "error") {
+      d.valence = clamp2(d.valence - 0.3, -1, 1);
+    }
+  }
+  function freeKey(mood, idleVariant) {
+    if (mood === "success" || mood === "error") return "notification";
+    if (mood === "speaking") return "working";
+    if (mood === "attention" || mood === "permission") return "waiting";
+    return cycleKeyOf(mood, idleVariant);
   }
   function play(agentKey, sequence, nowMs, phase) {
     const key = String(agentKey || "blob");
@@ -1916,41 +2829,53 @@ var Bloub = (() => {
     const d = directors.get(key);
     const tl = compile(sequence && sequence.length ? sequence : [{ cycle: "idle0" }], clock);
     if (d) d.timeline = tl;
-    else directors.set(key, { timeline: tl, compact: false, mood: "idle", latched: "", seen: clock });
+    else directors.set(key, newDirector(clock, false, "idle", tl, 0));
     return tl.once.map((b) => b.clip + ":" + b.state + "@" + (b.at - clock).toFixed(2)).concat(["loop " + tl.loopClip]);
   }
   function direct(agentKey, clock, mood, compact, idleVariant) {
     let d = directors.get(agentKey);
     if (!d) {
-      const first = mood === "permission" ? "notification" : restCycle(mood, idleVariant);
-      d = {
-        timeline: compile([{ cycle: first }], 0),
-        compact,
-        mood,
-        latched: mood === "permission" ? "attention" : "",
-        seen: clock
-      };
+      const first = mood === "permission" ? "notification" : firstCycle(mood, idleVariant);
+      d = newDirector(clock, compact, mood, compile([{ cycle: first }], 0), idleVariant);
+      if (mood === "permission") d.latched = "attention";
       directors.set(agentKey, d);
       return d;
     }
     const stale = clock - d.seen > 1.5;
     d.seen = clock;
+    d.idleVariant = idleVariant;
     const wasCompact = d.compact;
     const wasMood = d.mood;
+    const wasActive = isActivity(wasMood);
+    const busy = isActivity(mood);
+    const dt = Math.max(0, clock - d.lastAt);
+    d.lastAt = clock;
+    if (dt > 0) {
+      const k = 1 - Math.exp(-dt / MOOD_TAU);
+      d.energy += (REST_ENERGY - d.energy) * k;
+      d.valence += (REST_VALENCE - d.valence) * k;
+      if (wasActive && !stale) d.energy -= BUSY_DRAIN_PER_MIN * dt / 60;
+      d.energy = clamp2(d.energy, 0, 1);
+    }
+    const changed = mood !== wasMood;
+    const outcome = changed ? outcomeClip(d, mood) : "";
+    if (changed) applyMoodEvent(d, mood);
     d.compact = compact;
     d.mood = mood;
-    const busy = mood === "busy" || mood === "working";
+    if (changed || isActive(mood)) d.lastActiveAt = clock;
     if (compact !== wasCompact) {
       if (compact) {
-        if (mood !== wasMood && OUTCOME_CLIP[mood] && !busy) {
-          d.latched = OUTCOME_CLIP[mood];
-          d.timeline = compile([{ cycle: d.latched, repeat: beatsOf(d.latched) }, { cycle: tailOf(d, idleVariant) }], clock);
+        if (outcome) {
+          d.latched = outcome;
+          d.timeline = compile(
+            [{ cycle: outcome }, ...restSeg(d, idleVariant, clock)],
+            clock,
+            queueOf(d.timeline, clock, PROTECTED)
+          );
           return d;
         }
-        const tail = tailOf(d, idleVariant);
-        if (d.timeline.loopClip !== tail) {
-          const keep2 = runningPrefix(d.timeline, clock, ["success", "error", "attention"]);
-          d.timeline = compile([{ cycle: tail }], clock, keep2);
+        if (d.timeline.loopClip !== restKey(d, idleVariant, clock)) {
+          d.timeline = compile(restSeg(d, idleVariant, clock), clock, queueOf(d.timeline, clock, PROTECTED));
         }
         return d;
       }
@@ -1958,40 +2883,57 @@ var Bloub = (() => {
         const ack = d.latched !== "";
         d.latched = "";
         d.timeline = compile(
-          [{ cycle: ack ? "end" : "glance" }, { cycle: tailOf(d, idleVariant) }],
-          clock
+          [ack ? { cycle: "end" } : glanceSeg(d), ...restSeg(d, idleVariant, clock)],
+          clock,
+          queueOf(d.timeline, clock, ENTER_PROTECTED)
         );
         return d;
       }
       d.latched = "";
-      d.timeline = compile([{ cycle: tailOf(d, idleVariant) }], clock);
+      d.timeline = compile(restSeg(d, idleVariant, clock), clock, queueOf(d.timeline, clock, PROTECTED));
       return d;
     }
-    if (mood === wasMood) return d;
-    const prefix = runningPrefix(d.timeline, clock, ["end"]);
+    if (!changed) {
+      if (RESTING.indexOf(mood) >= 0 && !d.latched && clock >= d.nextCheck) {
+        d.nextCheck = clock + 1;
+        if (clock >= d.timeline.onceEnd && restKey(d, idleVariant, clock) !== d.timeline.loopClip) {
+          d.timeline = compile(restSeg(d, idleVariant, clock), clock, boundaryOf(d.timeline, clock));
+        }
+      }
+      return d;
+    }
     if (busy) {
       d.latched = "";
-      d.timeline = compile([{ cycle: "glance" }, { cycle: "working" }], clock, prefix);
+      const seq = wasActive ? [{ cycle: ACTIVITY[mood] }] : [glanceSeg(d), { cycle: ACTIVITY[mood] }];
+      d.timeline = compile(seq, clock, queueOf(d.timeline, clock, ENTER_PROTECTED));
       return d;
     }
-    if (mood === "listening" || wasMood === "listening") {
-      const enter = mood === "listening" && wasMood !== "listening";
+    if (outcome) {
+      const wake = wakeSeq(d);
+      d.latched = compact ? outcome : "";
       d.timeline = compile(
-        enter ? [{ cycle: "glance" }, { cycle: "listening" }] : [{ cycle: tailOf(d, idleVariant) }],
+        [...wake, { cycle: outcome }, ...restSeg(d, idleVariant, clock)],
         clock,
-        prefix
+        queueOf(d.timeline, clock, ENTER_PROTECTED)
       );
       return d;
     }
-    const outcome = OUTCOME_CLIP[mood];
-    if (outcome) {
-      d.latched = compact ? outcome : "";
-      d.timeline = compile([{ cycle: outcome, repeat: beatsOf(outcome) }, { cycle: tailOf(d, idleVariant) }], clock, prefix);
+    if (mood === "listening" || wasMood === "listening") {
+      const enter = mood === "listening";
+      d.timeline = compile(
+        enter ? [glanceSeg(d), { cycle: "listening" }] : restSeg(d, idleVariant, clock),
+        clock,
+        queueOf(d.timeline, clock, ENTER_PROTECTED)
+      );
       return d;
     }
     if (d.latched) return d;
-    const keep = runningPrefix(d.timeline, clock, ["end", "success", "error", "attention"]);
-    d.timeline = keep.length ? compile([{ cycle: tailOf(d, idleVariant) }], clock, keep) : compile([{ cycle: "glance" }, { cycle: tailOf(d, idleVariant) }], clock);
+    const run = pendingScene(d.timeline, clock, PROTECTED);
+    if (run.length) {
+      d.timeline = compile(restSeg(d, idleVariant, clock), clock, run);
+    } else {
+      d.timeline = compile([glanceSeg(d), ...restSeg(d, idleVariant, clock)], clock, heldBlock(d.timeline, clock));
+    }
     return d;
   }
   function shapeIdOf(raw) {
@@ -2127,29 +3069,99 @@ var Bloub = (() => {
       state
     };
   }
-  function tick(id, nowMs, shapeRaw, expressionRaw, mood, idleVariant, phase, fill, eyesRaw, flow) {
+  var REACTIONS = {
+    tool: { clip: "tapTool", gap: 1.5 },
+    toolError: { clip: "ouch", gap: 2 },
+    typed: { clip: "perk", gap: 4 },
+    hover: { clip: "perk", gap: 4 },
+    poke: { clip: "poke", gap: 0.8 },
+    question: { clip: "question", gap: 6, queue: true },
+    laugh: { clip: "laugh", gap: 8, queue: true, valence: 0.15, energy: 0.05 },
+    love: { clip: "love", gap: 8, queue: true, valence: 0.2 }
+  };
+  function react(agentKey, kind, nowMs) {
+    const key = String(agentKey || "");
+    const spec = Object.prototype.hasOwnProperty.call(REACTIONS, kind) ? REACTIONS[kind] : void 0;
+    const d = key ? directors.get(key) : void 0;
+    if (!spec || !d) return false;
+    const clock = (Number(nowMs) || 0) / 1e3;
+    const last = d.reactedAt[spec.clip];
+    if (last !== void 0 && clock - last < spec.gap) return false;
+    const protectedNow = PROTECTED.indexOf(place(d.timeline, clock).clip) >= 0;
+    if (protectedNow && !spec.queue) return false;
+    const wake = wakeSeq(d);
+    d.reactedAt[spec.clip] = clock;
+    d.lastActiveAt = clock;
+    if (kind === "tool") d.energy = clamp2(d.energy - 0.01, 0, 1);
+    if (spec.valence) d.valence = clamp2(d.valence + spec.valence, -1, 1);
+    if (spec.energy) d.energy = clamp2(d.energy + spec.energy, 0, 1);
+    const prefix = protectedNow ? pendingScene(d.timeline, clock, PROTECTED) : heldBlock(d.timeline, clock);
+    d.timeline = compile([...wake, { cycle: spec.clip }, ...restSeg(d, d.idleVariant, clock)], clock, prefix);
+    return true;
+  }
+  function gazeToward(fx, fy) {
+    return { yaw: fx * 38, pitch: -fy * 30, mix: 1, spin: 0, wander: 0 };
+  }
+  var HANDBACK = { yaw: 0, pitch: 0, mix: 0, spin: 0, wander: 1 };
+  var POINTER_REACH = 6;
+  var POINTER_YAW = 34;
+  var POINTER_PITCH = 26;
+  var POINTER_MIX = 0.8;
+  var POINTER_MORPH = 0.18;
+  var POINTER_RELEASE_MORPH = 0.6;
+  var POINTER_STEP = 0.5;
+  var POINTER_OFF = { yaw: 0, pitch: 0, mix: 0, spin: 0, wander: 1 };
+  function pointerGaze(lookX, lookY, size) {
+    if (!(size > 0) || !Number.isFinite(lookX) || !Number.isFinite(lookY)) return null;
+    const reach = size * POINTER_REACH;
+    return {
+      yaw: clamp2(lookX / reach, -1, 1) * POINTER_YAW,
+      // Screen y points down; positive pitch looks up.
+      pitch: -clamp2(lookY / reach, -1, 1) * POINTER_PITCH
+    };
+  }
+  function tick(id, nowMs, shapeRaw, expressionRaw, mood, idleVariant, phase, fill, eyesRaw, flow, flight, flightX, flightY, lookX, lookY, lookActive, size) {
     const key = String(id || "blob");
     const shapeId = shapeIdOf(shapeRaw);
     const expressionId = expressionIdOf(expressionRaw, eyesRaw, mood);
     const flowMode = String(flow || "");
     if (flowMode === "still") return stillTick(shapeId, expressionId, fill);
     const clock = (Number(nowMs) || 0) / 1e3 + (Number(phase) || 0);
+    const directed = flowMode === "compact" || flowMode === "open";
+    const flightMode = String(flight || "");
+    const flying = directed && (flightMode === "open" || flightMode === "close");
+    const fx = Number(flightX) || 0;
+    const fy = Number(flightY) || 0;
     let timeline;
-    if (flowMode === "compact" || flowMode === "open") {
+    if (directed) {
       const agentKey = key.indexOf("/") >= 0 ? key.slice(0, key.lastIndexOf("/")) : key;
       timeline = direct(agentKey, clock, String(mood || "idle"), flowMode === "compact", idleVariant).timeline;
     } else {
-      timeline = freeTimeline(cycleKeyOf(mood, idleVariant));
+      timeline = freeTimeline(freeKey(String(mood || "idle"), idleVariant));
     }
     const placed = place(timeline, clock);
     const start = placed.at;
+    const state = flying ? "travel" : placed.state;
     let player = players.get(key);
     const shape = SHAPE_BY_ID.get(shapeId);
     const expression = EXPRESSION_BY_ID.get(expressionId) || null;
     if (!player) {
-      const engine = new BotEngine(100, placed.state, shape ? shape.radii : null, expression);
-      player = { engine, shapeId, expressionId, timelineKey: timeline.key, blockAt: start, state: placed.state };
-      engine.reset(placed.state, start);
+      const engine = new BotEngine(100, state, shape ? shape.radii : null, expression);
+      player = {
+        engine,
+        shapeId,
+        expressionId,
+        timelineKey: timeline.key,
+        blockAt: start,
+        state,
+        flying: false,
+        lookX: NaN,
+        lookY: NaN,
+        pointerOn: false,
+        pointerYaw: 0,
+        pointerPitch: 0
+      };
+      engine.reset(state, start);
       players.set(key, player);
       if (players.size > 24) {
         const oldest = players.keys().next().value;
@@ -2164,20 +3176,60 @@ var Bloub = (() => {
         player.expressionId = expressionId;
         player.engine.setExpression(expression, clock);
       }
-      const free = timeline.key.indexOf("free:") === 0;
-      if (player.timelineKey !== timeline.key && free) {
-        player.engine.reset(placed.state, start);
-      } else if (player.timelineKey !== timeline.key || player.blockAt !== start) {
-        if (player.state !== placed.state) player.engine.setState(placed.state, start);
+      if (!flying) {
+        if (player.flying) {
+          player.flying = false;
+          player.engine.setLook(HANDBACK, clock, HANDBACK_MORPH);
+          player.engine.setState(placed.state, clock);
+          player.state = placed.state;
+        }
+        const free = timeline.key.indexOf("free:") === 0;
+        if (player.timelineKey !== timeline.key && free) {
+          player.engine.reset(placed.state, start);
+        } else if (player.timelineKey !== timeline.key || player.blockAt !== start) {
+          if (player.state !== placed.state) player.engine.setState(placed.state, start);
+        }
+        player.timelineKey = timeline.key;
+        player.blockAt = start;
+        player.state = placed.state;
       }
-      player.timelineKey = timeline.key;
-      player.blockAt = start;
-      player.state = placed.state;
     }
-    return present(player.engine.sample(clock), fill, placed.clip, placed.state);
+    if (flying) {
+      if (!player.flying) {
+        player.engine.setState("travel", clock);
+        player.flying = true;
+        player.state = "travel";
+        player.pointerOn = false;
+      }
+      if (fx !== player.lookX || fy !== player.lookY) {
+        player.lookX = fx;
+        player.lookY = fy;
+        player.engine.setLook(gazeToward(fx, fy), clock, FLIGHT_GAZE_MORPH);
+      }
+    }
+    if (!flying) {
+      const aim = Number(lookActive) === 1 ? pointerGaze(Number(lookX), Number(lookY), Number(size)) : null;
+      if (aim) {
+        if (!player.pointerOn || Math.abs(aim.yaw - player.pointerYaw) > POINTER_STEP || Math.abs(aim.pitch - player.pointerPitch) > POINTER_STEP) {
+          player.pointerOn = true;
+          player.pointerYaw = aim.yaw;
+          player.pointerPitch = aim.pitch;
+          player.engine.setLook(
+            { yaw: aim.yaw, pitch: aim.pitch, mix: POINTER_MIX, spin: 0, wander: 0 },
+            clock,
+            POINTER_MORPH
+          );
+        }
+      } else if (player.pointerOn) {
+        player.pointerOn = false;
+        player.engine.setLook(POINTER_OFF, clock, POINTER_RELEASE_MORPH);
+      }
+    }
+    return present(player.engine.sample(clock), fill, placed.clip, state);
   }
   return __toCommonJS(bridge_exports);
 })();
-function tick(id, nowMs, shapeId, expressionId, mood, idleVariant, phase, fill, eyes, flow) { return Bloub.tick(id, nowMs, shapeId, expressionId, mood, idleVariant, phase, fill, eyes, flow) }
+function tick(id, nowMs, shapeId, expressionId, mood, idleVariant, phase, fill, eyes, flow, flight, flightX, flightY, lookX, lookY, lookActive, size) { return Bloub.tick(id, nowMs, shapeId, expressionId, mood, idleVariant, phase, fill, eyes, flow, flight, flightX, flightY, lookX, lookY, lookActive, size) }
 function play(agentKey, sequence, nowMs, phase) { return Bloub.play(agentKey, sequence, nowMs, phase) }
+function react(agentKey, kind, nowMs) { return Bloub.react(agentKey, kind, nowMs) }
 function release(id) { return Bloub.release(id) }

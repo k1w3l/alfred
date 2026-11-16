@@ -9,6 +9,7 @@ import qs.Commons
 import qs.Ui
 import "AlfredModel.js" as AlfredModel
 import "ComposerTheme.js" as Theme
+import "BloubEngine.js" as Bloub
 
 Item {
   id: root
@@ -197,16 +198,42 @@ Item {
   property bool focused: false
   // 0 = compact ball, 1 = the face sitting in the pill's agent row.
   property real dock: 0
-  // 0 = the face is in the pill, 1 = it has travelled to the bar icon.
-  property real travel: 0
   property bool departing: false
   // Exclusive only for the first frames after open, then OnDemand so the
   // rest of the desktop can take the pointer and the keyboard.
   property bool focusPrimed: false
   property Item leadChip: null
+  // Free ball: offset of the compact ball from its top-centre rest, per screen
+  // name. The pill never moves; only the ball's place is offset.
+  property real ballOffsetX: 0
+  property real ballOffsetY: 0
+  property var ballOffsets: ({})
+  property bool ballDragging: false
+  readonly property string ballScreen: root.activeScreen ? String(root.activeScreen.name || "") : ""
+  // The column sits at the ball only once the pill has faded out and the face
+  // has landed (ballHome). Until then the pill stays at the top centre, so it
+  // never slides; the ball's place comes from ballCentre() meanwhile.
+  property bool ballHome: false
+  readonly property real ballShiftX: root.ballHome ? root.ballOffsetX : 0
+  readonly property real ballShiftY: root.ballHome ? root.ballOffsetY : 0
+  // Pill opacity: 1 open, 0 at the ball. It fades in and out in place.
+  property real pillFade: 1
+  // Ball arrival: 0 just after the face lands, 1 once the ball body has settled.
+  property real ballAppear: 1
+  readonly property int hudTopY: Style.bar.sizeHorizontal + Style.gapsOut + root.px(12)
   property real trayX: -1
   property real trayY: -1
   property real trayS: 0
+  // Icon rects per screen name from alfred-tray.json, {name: {x, y, s}}.
+  property var trayRects: ({})
+  // Hero centre from the previous tick, and its low-passed velocity (px/s).
+  property real heroPrevX: 0
+  property real heroPrevY: 0
+  property real heroPrevT: 0
+  property real heroVx: 0
+  property real heroVy: 0
+  property real heroStretch: 1
+  property real heroStretchAngle: 0
   property real heroOpacity: 1
   // 0 = a chin sitting on the bar icon, 1 = the pill at rest.
   // Open 560 ms and close 440 ms, both smooth, close without overshoot.
@@ -232,6 +259,75 @@ Item {
   property real notchFr: 0
   property real notchShown: 1
   property real plateOpacity: 1
+  // Set at the close handoff: the hero and plate are fading out and the bar
+  // icon is taking the face back. Cleared once the fade has finished.
+  property bool closeFading: false
+  // Flight the engine plays on the hero: "open" while the chin climbs out of
+  // the bar, "close" from the start of the close until the fade has ended.
+  readonly property string flightPhase: root.notchClosing || root.closeFading
+    ? "close" : (root.notchMoving ? "open" : "")
+
+  // Notch thresholds. The value is t: 0 = chin on the bar icon, 1 = pill at rest.
+  readonly property QtObject phase: QtObject {
+    // Open: the dock slide starts once the chin has left the bar.
+    readonly property real dockStart: 0.7
+    // Open: composer content starts to show, and the hero flow goes "open".
+    readonly property real contentShow: 0.9
+    // Open: close enough to rest to snap onto the pill and finish.
+    readonly property real settle: 0.96
+    // Close: composer content is fully hidden below contentHide.
+    readonly property real contentFade: 0.9
+    readonly property real contentHide: 0.72
+    // Close: the hero leaves the plate for the dock below this value.
+    readonly property real dockLeave: 0.72
+    // Close: the bar icon takes the face back and the hero and plate fade out.
+    readonly property real handoff: 0.28
+    // Close: the chin sits on the icon; the notch is done and hudOpen drops.
+    readonly property real landed: 0.04
+    // Plate shows its 1px rim above this value.
+    readonly property real rimShow: 0.5
+    // Only a notch near rest counts as "still moving" for placement and focus.
+    readonly property real nearRest: 0.98
+    // Snap guards for the notch frame at the two ends.
+    readonly property real atRest: 0.999
+    readonly property real atSeed: 0.001
+    // Close: the hero keeps the agent-row size above closeRide, and only starts
+    // leaving the plate above closeLeave.
+    readonly property real closeRide: 0.4
+    readonly property real closeLeave: 0.2
+    // Seed capsule: width is the icon size times seedWidth, at least icon + seedPad.
+    readonly property real seedWidth: 1.9
+    readonly property real seedPad: 10
+    // Lead exponent for width, x and height; lag exponent for the top edge.
+    readonly property real leadExp: 1.2
+    readonly property real lagExp: 1.4
+    // Tolerance under which runNotch treats the notch as already there.
+    readonly property real settleEpsilon: 0.01
+    // Mid-flight size swell: size *= 1 + flightBump * sin(pi * t), zero at both ends.
+    readonly property real flightBump: 1.1
+    // Low-pass factor for the hero's velocity and stretch, per 16 ms tick.
+    readonly property real velSmooth: 0.35
+    // Stretch in flight: 1 + min(stretchMax, speed px/s / stretchSpeed).
+    readonly property real stretchMax: 0.38
+    readonly property real stretchSpeed: 2200
+    // Landing plop: squash depth at the bottom, press time up and release time down (ms).
+    readonly property real plopDepth: 0.16
+    readonly property int plopUp: 90
+    readonly property int plopDown: 220
+    // Face travel between the ball and the pill row (ms). The curve is a soft
+    // start and a soft landing; the path is a quadratic curve, its control point
+    // lifted flyArc base px above the chord so the face arcs toward the top.
+    readonly property int flyDuration: 700
+    readonly property var flyCurve: [0.45, 0.0, 0.25, 1.0, 1.0, 1.0]
+    readonly property real flyArc: 80
+    // Pill fade in place (ms) and the scale it grows from while fading in.
+    readonly property int pillFadeMs: 260
+    readonly property real pillScaleFrom: 0.96
+    // Ball body arrival: it dims and dips slightly, then clears over ballAppearMs.
+    readonly property int ballAppearMs: 200
+    readonly property real ballAppearDim: 0.25
+    readonly property real ballAppearDip: 0.04
+  }
 
   onNotchChanged: root.syncNotchFrame()
 
@@ -248,6 +344,9 @@ Item {
   readonly property bool transcribing: alfred ? alfred.transcribing === true : false
   readonly property bool awaitingPermission: alfred ? alfred.awaitingPermission === true : false
   readonly property string lastOutcome: alfred ? String(alfred.lastOutcome || "") : ""
+  readonly property bool outcomeSeen: alfred ? alfred.outcomeSeen === true : false
+  readonly property bool reasoning: alfred ? alfred.reasoning === true : false
+  readonly property bool streaming: alfred ? alfred.streaming === true : false
   readonly property string modelName: alfred ? String(alfred.modelName || "") : ""
   readonly property var modelOptions: alfred && alfred.modelOptions ? alfred.modelOptions : []
   readonly property string modelProvider: alfred ? String(alfred.modelProvider || "") : ""
@@ -380,9 +479,12 @@ Item {
   readonly property string mood: {
     if (root.listening) return "listening"
     if (root.awaitingPermission) return "permission"
+    // Text is streaming (speaking), or the model is still thinking (reasoning).
+    if (root.busy && root.streaming) return "speaking"
+    if (root.busy && root.reasoning) return "reasoning"
     if (root.busy || (root.compact && root.anyBusy)) return "busy"
-    if (root.lastError !== "" || root.lastOutcome === "error") return "error"
-    if (root.lastOutcome === "success") return "success"
+    if (!root.outcomeSeen && (root.lastError !== "" || root.lastOutcome === "error")) return "error"
+    if (!root.outcomeSeen && root.lastOutcome === "success") return "success"
     return "idle"
   }
   readonly property color moodColor: {
@@ -449,10 +551,31 @@ Item {
   }
   readonly property int ballSize: Math.max(root.px(60), root.fontPx(Style.font.title) + root.px(34))
   readonly property int agentSize: root.px(Theme.primaryPx())
-  readonly property bool ballOrbits: root.compact && (root.mood === "busy" || root.mood === "listening")
+  // Every turn in progress: reasoning, speaking and busy share the ball's look.
+  readonly property bool working: root.mood === "busy" || root.mood === "reasoning" || root.mood === "speaking"
+  readonly property bool ballOrbits: root.compact && (root.working || root.mood === "listening")
   readonly property int ballPad: root.ballOrbits ? root.px(18) : 0
   // the compact ball swells a little while its agent works
-  readonly property int ballFace: root.compact && root.mood === "busy" ? Math.round(root.ballSize * 1.3) : root.ballSize
+  readonly property int ballFace: root.compact && root.working ? Math.round(root.ballSize * 1.3) : root.ballSize
+  // The hero is moved by placeHero every tick, so it cannot carry a Behavior.
+  // Its ball size and orbit pad ease on the pill's 340 ms curve instead, which
+  // keeps the hero and the pill from snapping apart on a busy swell.
+  property real ballFaceShown: root.ballFace
+  property real ballPadShown: root.ballPad
+  Behavior on ballFaceShown {
+    NumberAnimation {
+      duration: 340
+      easing.type: Easing.BezierSpline
+      easing.bezierCurve: [0.23, 1, 0.32, 1, 1, 1]
+    }
+  }
+  Behavior on ballPadShown {
+    NumberAnimation {
+      duration: 340
+      easing.type: Easing.BezierSpline
+      easing.bezierCurve: [0.23, 1, 0.32, 1, 1, 1]
+    }
+  }
   readonly property int pillWidth: root.focused ? root.px(720) : root.ballFace + root.ballPad * 2
   readonly property int composerTextHeight: composerInput ? Math.min(Math.ceil(composerInput.implicitHeight), root.px(Theme.composerMaxPx())) : root.fontPx(Style.font.body)
   readonly property bool composerMultiline: composerInput ? composerInput.lineCount > 1 : false
@@ -514,16 +637,19 @@ Item {
     root.trayS = s
   }
 
-  function ballTopLeft(span) {
-    var c = pill.mapToItem(escScope, pill.width / 2, pill.height / 2)
-    return Qt.point(c.x - span / 2, c.y - span / 2)
+  // Centre of the compact ball, from the saved offset and not from the pill, so
+  // the face can fly to and from it while the pill stays where it is.
+  function ballCentre() {
+    return Qt.point(escScope.width / 2 + root.ballOffsetX,
+      root.hudTopY + root.ballOffsetY + (root.ballFaceShown + root.ballPadShown * 2) / 2)
   }
 
   function chipTopLeft() {
     if (root.leadChip && root.leadChip.width > 2 && root.dock > 0.35) {
       return root.leadChip.mapToItem(escScope, 0, 0)
     }
-    var origin = pill.mapToItem(escScope, 0, 0)
+    // The pill is scaled while it fades in; its layout slot is not.
+    var origin = pillSlot.mapToItem(escScope, (pillSlot.width - pill.width) / 2, 0)
     var index = 0
     var rows = root.visibleRoster || []
     var i
@@ -542,11 +668,32 @@ Item {
     )
   }
 
+  // The screen the HUD is on: the one it was summoned to, else the active one.
+  function hudScreenKey() {
+    if (root.hudScreenName !== "") return root.hudScreenName
+    return root.activeScreen ? String(root.activeScreen.name || "") : ""
+  }
+
+  function trayRectFor(name) {
+    if (name === "") return null
+    var maps = [alfred ? alfred.trayRects : null, root.trayRects]
+    for (var i = 0; i < maps.length; i++) {
+      var m = maps[i]
+      if (m && m[name] && m[name].s > 2) return m[name]
+    }
+    return null
+  }
+
   function trayTopLeft() {
     var x = root.trayX
     var y = root.trayY
     var s = root.trayS
-    if (alfred && alfred.trayS > 2) {
+    var rect = root.trayRectFor(root.hudScreenKey())
+    if (rect) {
+      x = rect.x
+      y = rect.y
+      s = rect.s
+    } else if (alfred && alfred.trayS > 2) {
       x = alfred.trayX
       y = alfred.trayY
       s = alfred.trayS
@@ -569,7 +716,7 @@ Item {
   function seedFrame() {
     var tray = root.trayTopLeft()
     var s = tray.s > 2 ? tray.s : Math.max(root.agentSize, 16)
-    var w = Math.max(s * 1.9, s + 10)
+    var w = Math.max(s * root.phase.seedWidth, s + root.phase.seedPad)
     var h = s
     return {
       x: tray.x + s / 2 - w / 2,
@@ -586,8 +733,8 @@ Item {
     var screenW = root.screenWidth()
     var r = (!root.focused || root.compact) ? h / 2 : root.px(Theme.arcRadiusPx())
     return {
-      x: screenW > 2 ? (screenW - w) / 2 : 0,
-      y: Style.bar.sizeHorizontal + Style.gapsOut + root.px(12),
+      x: screenW > 2 ? (screenW - w) / 2 + root.ballShiftX : 0,
+      y: root.hudTopY + root.ballShiftY,
       w: w,
       h: h,
       r: r
@@ -604,6 +751,13 @@ Item {
     root.notchHold = true
   }
 
+  // Share of the seed-to-rest travel covered at notch t. The plate's width and
+  // chin use it, and so does the hero's size, so the face never runs on a
+  // different curve from the shape it rides.
+  function notchLead(t) {
+    return 1 - Math.pow(1 - t, root.phase.leadExp)
+  }
+
   // Width and the horizontal slide lead; the top edge lags, so the chin
   // drops out of the bar before the shape lets go of it.
   function notchFrame() {
@@ -612,12 +766,12 @@ Item {
       ? { x: root.holdX, y: root.holdY, w: root.holdW, h: root.holdH, r: root.holdR }
       : root.liveRestFrame()
     var t = root.notch
-    if (!isFinite(t) || t >= 0.999) return rest
-    if (t <= 0.001) return seed
+    if (!isFinite(t) || t >= root.phase.atRest) return rest
+    if (t <= root.phase.atSeed) return seed
     var tc = Math.max(0, Math.min(1, t))
     // Chin and width lead a little; the top edge stays on the bar longer.
-    var lead = 1 - Math.pow(1 - tc, 1.2)
-    var lag = Math.pow(tc, 1.4)
+    var lead = root.notchLead(tc)
+    var lag = Math.pow(tc, root.phase.lagExp)
     var cx = (seed.x + seed.w / 2) + ((rest.x + rest.w / 2) - (seed.x + seed.w / 2)) * lead
     var w = seed.w + (rest.w - seed.w) * lead
     var h = seed.h + (rest.h - seed.h) * lead
@@ -636,12 +790,12 @@ Item {
     if (!isFinite(t)) return closing ? 0 : 1
     t = Math.max(0, Math.min(1, t))
     if (closing) {
-      if (t > 0.9) return 1
-      if (t < 0.72) return 0
-      return (t - 0.72) / 0.18
+      if (t > root.phase.contentFade) return 1
+      if (t < root.phase.contentHide) return 0
+      return (t - root.phase.contentHide) / (root.phase.contentFade - root.phase.contentHide)
     }
-    if (t < 0.9) return 0
-    return (t - 0.9) / 0.1
+    if (t < root.phase.contentShow) return 0
+    return (t - root.phase.contentShow) / (1 - root.phase.contentShow)
   }
 
   function syncNotchFrame() {
@@ -653,11 +807,95 @@ Item {
     root.notchFr = f.r
     root.notchShown = root.notchMoving ? root.notchContentOf(root.notch, root.notchClosing) : 1
     if (root.notchMoving && !root.notchClosing && root.focused && !root.compactAfterNotch
-        && !root.notchDocked && root.notch > 0.7) {
+        && !root.notchDocked && root.notch > root.phase.dockStart) {
       root.notchDocked = true
       dockAnim.to = 1
       dockAnim.restart()
     }
+    if (root.notchMoving && root.notchClosing && root.notch <= root.phase.handoff)
+      root.beginCloseFade()
+  }
+
+  // Close handoff. The hero and plate fade out while the bar icon fades in
+  // on the same 160 ms curve, so the glyph takes the face back as the chin lands.
+  function beginCloseFade() {
+    if (root.closeFading) return
+    root.closeFading = true
+    if (alfred) alfred.trayAway = false
+    heroPlop.restart()
+    root.fadeOutFlight()
+  }
+
+  function fadeOutFlight() {
+    heroFade.to = 0
+    plateFade.to = 0
+    heroFade.restart()
+    plateFade.restart()
+  }
+
+  // The fade is over and the chin is home: drop the flight state.
+  function finishHudClose() {
+    plateFade.stop()
+    root.plateOpacity = 1
+    root.notchMoving = false
+    root.notchHold = false
+    root.notchClosing = false
+    root.notch = 1
+    root.notchShown = 1
+    root.closeFading = false
+    root.opened = false
+    root.hudScreenName = ""
+    root.dock = 0
+    root.heroOpacity = 1
+  }
+
+  // Hero centre velocity from the last tick, low-passed. In flight, and while the
+  // face travels between the ball and the pill row, the hero stretches along its
+  // heading and keeps its area; at rest it eases back.
+  function updateHeroMotion() {
+    var now = Date.now()
+    var cx = hero.x + hero.width / 2
+    var cy = hero.y + hero.height / 2
+    var dt = (now - root.heroPrevT) / 1000
+    var rawX = 0
+    var rawY = 0
+    if (root.heroPrevT > 0 && dt > 0.0005 && dt < 0.1) {
+      rawX = (cx - root.heroPrevX) / dt
+      rawY = (cy - root.heroPrevY) / dt
+    }
+    root.heroPrevX = cx
+    root.heroPrevY = cy
+    root.heroPrevT = now
+    root.heroVx += (rawX - root.heroVx) * root.phase.velSmooth
+    root.heroVy += (rawY - root.heroVy) * root.phase.velSmooth
+    var speed = Math.hypot(root.heroVx, root.heroVy)
+    var moving = root.flightPhase !== "" || ballFlyAnim.running
+    var target = moving
+      ? 1 + Math.min(root.phase.stretchMax, speed / root.phase.stretchSpeed)
+      : 1
+    root.heroStretch += (target - root.heroStretch) * root.phase.velSmooth
+    // Screen-space heading in degrees (y down, so clockwise positive, as Rotation).
+    if (speed > 1) root.heroStretchAngle = Math.atan2(root.heroVy, root.heroVx) * 180 / Math.PI
+  }
+
+  // What the engine is flying the face toward, as a unit vector from the hero's
+  // centre: the pill rest when opening, the bar icon when closing.
+  function flightDirection() {
+    var target
+    if (root.flightPhase === "close") {
+      var tray = root.trayTopLeft()
+      target = { x: tray.x + tray.s / 2, y: tray.y + tray.s / 2 }
+    } else {
+      var rest = root.notchHold
+        ? { x: root.holdX, y: root.holdY, w: root.holdW, h: root.holdH }
+        : root.liveRestFrame()
+      target = { x: rest.x + rest.w / 2, y: rest.y + rest.h / 2 }
+    }
+    var dx = target.x - (hero.x + hero.width / 2)
+    var dy = target.y - (hero.y + hero.height / 2)
+    var len = Math.hypot(dx, dy)
+    if (len < 0.5) return Qt.point(0, 0)
+    return Qt.point(dx / len, dy / len)
   }
 
   function runNotch(closing) {
@@ -668,7 +906,7 @@ Item {
     root.notchMoving = true
     root.notchClosing = closing
     root.syncNotchFrame()
-    if (Math.abs(root.notch - dest) < 0.01) {
+    if (Math.abs(root.notch - dest) < root.phase.settleEpsilon) {
       root.notch = dest
       root.notchArm = true
       root.finishNotch(closing)
@@ -687,7 +925,7 @@ Item {
   function finishNotch(closing) {
     if (!root.notchArm) return
     if (closing) {
-      if (!root.notchClosing || root.notch > 0.04) return
+      if (!root.notchClosing || root.notch > root.phase.landed) return
       root.notchArm = false
       root.notch = 0
       root.syncNotchFrame()
@@ -697,14 +935,16 @@ Item {
         alfred.hudOpen = false
         alfred.hudFocused = false
       }
-      // The chin is on the icon. Fade it so the bar glyph shows through.
-      heroFade.to = 0
-      plateFade.to = 0
-      heroFade.restart()
-      plateFade.restart()
+      // The chin is on the icon. The handoff normally started the fade already;
+      // a fade that ended early, or was stopped, is finished or restarted here.
+      root.beginCloseFade()
+      if (!heroFade.running) {
+        if (root.heroOpacity > 0.05) root.fadeOutFlight()
+        else root.finishHudClose()
+      }
       return
     }
-    if (root.notchClosing || root.notch < 0.96) return
+    if (root.notchClosing || root.notch < root.phase.settle) return
     root.notchArm = false
     root.notchSnap = true
     root.notch = 1
@@ -713,6 +953,7 @@ Item {
     root.notchHold = false
     root.notchShown = 1
     root.syncNotchFrame()
+    heroPlop.restart()
     Qt.callLater(function() { root.notchSnap = false })
     if (root.compactAfterNotch) {
       root.compactAfterNotch = false
@@ -730,15 +971,19 @@ Item {
     var t = Math.max(0, Math.min(1, root.notch))
     var tray = root.trayTopLeft()
     var home = tray.s > 2 ? tray.s : f.h
-    var riding = (root.focused && !root.notchClosing && !root.compactAfterNotch) ? root.agentSize : root.ballFace
+    var riding = (root.focused && !root.notchClosing && !root.compactAfterNotch) ? root.agentSize : root.ballFaceShown
     if (root.notchClosing)
-      riding = root.closeDock > 0.4 ? root.agentSize : root.ballFace
-    var size = home + (riding - home) * t
+      riding = root.closeDock > root.phase.closeRide ? root.agentSize : root.ballFaceShown
+    // Same lead curve as the plate's width and chin, so the face and the shape agree.
+    var size = home + (riding - home) * root.notchLead(t)
+    // The face swells mid-flight so it reads; both ends keep their sizes.
+    size *= 1 + root.phase.flightBump * Math.sin(Math.PI * t)
     var plateX = f.x + f.w / 2 - size / 2
     var plateY = f.y + f.h / 2 - size / 2
     var u = 0
     if (!root.notchClosing) u = Math.max(0, Math.min(1, root.dock))
-    else if (root.closeDock > 0.2) u = Math.max(0, Math.min(1, (t - 0.72) / 0.28))
+    else if (root.closeDock > root.phase.closeLeave)
+      u = Math.max(0, Math.min(1, (t - root.phase.dockLeave) / (1 - root.phase.dockLeave)))
     var destX = plateX
     var destY = plateY
     var destS = size
@@ -755,26 +1000,28 @@ Item {
   }
 
   function placeHero() {
-    if (root.notchMoving || (root.opened && root.plateOpacity < 0.99 && root.notch < 0.98)) {
+    if (root.notchMoving || (root.opened && root.plateOpacity < 0.99 && root.notch < root.phase.nearRest)) {
       root.placeHeroOnNotch()
       return
     }
     if (!root.opened || pill.width < 2) return
     var d = Math.max(0, Math.min(1, root.dock))
-    var t = Math.max(0, Math.min(1, root.travel))
-    var ballSize = root.ballFace
-    if (d < 0.001 && t < 0.001) {
-      var inner = Math.min(pill.width, pill.height) - root.ballPad * 2
-      if (inner > 2) ballSize = inner
-    }
-    var ball = root.ballTopLeft(ballSize)
+    var ballSize = root.ballFaceShown
+    var ballC = root.ballCentre()
     var chip = root.chipTopLeft()
-    var tray = root.trayTopLeft()
-    var size = (ballSize * (1 - d) + root.agentSize * d) * (1 - t) + tray.s * t
-    hero.x = (ball.x * (1 - d) + chip.x * d) * (1 - t) + tray.x * t
-    hero.y = (ball.y * (1 - d) + chip.y * d) * (1 - t) + tray.y * t
+    var rowC = Qt.point(chip.x + root.agentSize / 2, chip.y + root.agentSize / 2)
+    // Quadratic curve from the ball to the row; the control point sits above the chord.
+    var lift = root.px(root.phase.flyArc)
+    var ctlX = (ballC.x + rowC.x) / 2
+    var ctlY = (ballC.y + rowC.y) / 2 - lift
+    var u = 1 - d
+    var px = u * u * ballC.x + 2 * u * d * ctlX + d * d * rowC.x
+    var py = u * u * ballC.y + 2 * u * d * ctlY + d * d * rowC.y
+    var size = ballSize * u + root.agentSize * d
     hero.width = size
     hero.height = size
+    hero.x = px - size / 2
+    hero.y = py - size / 2
   }
 
   function releaseKeyboard() {
@@ -788,9 +1035,11 @@ Item {
     if (!root.opened) {
       root.departing = false
       root.notchMoving = false
-      root.travel = 0
       root.dock = 0
-      if (alfred) alfred.hudOpen = false
+      if (alfred) {
+        alfred.hudOpen = false
+        alfred.trayAway = false
+      }
       return
     }
     if (root.departing) return
@@ -805,37 +1054,30 @@ Item {
     root.focused = false
     if (alfred) alfred.hudFocused = false
     root.departing = true
-    travelAnim.stop()
-    // hudOpen stays true until the chin sits on the icon, so the bar slot
-    // stays empty while this same face is still on screen.
+    // The face stays away from the bar icon until the close handoff (notch 0.28).
+    // hudOpen may already be false (the service clears it on hide), so the
+    // bar reads trayAway, not hudOpen, to keep the icon empty during the flight.
     root.runNotch(true)
-  }
-
-  function finishDepart() {
-    if (!root.departing || root.notchMoving) return
-    root.departing = false
-    root.travel = 1
-    if (alfred) {
-      alfred.hudOpen = false
-      alfred.hudFocused = false
-    }
-    // The bar icon fades in underneath; the flyer fades out on the same spot.
-    heroFade.to = 0
-    heroFade.restart()
   }
 
   function unfocusHud() {
     if (!root.opened) {
       root.pinHudScreen()
+      root.ballHome = false
+      ballFlyAnim.stop()
+      pillFadeAnim.stop()
+      root.pillFade = 1
+      ballAppearAnim.stop()
+      root.ballAppear = 1
       plateFade.stop()
       heroFade.stop()
+      root.closeFading = false
       root.heroOpacity = 1
       root.plateOpacity = 1
       root.notchHold = false
       root.notchDocked = false
       root.compactAfterNotch = false
       root.dock = 0
-      root.travel = 0
       root.notch = 0
       root.focused = false
       root.departing = false
@@ -843,16 +1085,19 @@ Item {
       if (alfred) {
         alfred.hudOpen = true
         alfred.hudFocused = false
+        alfred.trayAway = true
       }
       root.releaseKeyboard()
       root.closeMenus()
       root.closePicker()
       root.syncNotchFrame()
       root.runNotch(false)
+      // The hero sits on the icon now, not on the next 16 ms tick.
+      root.placeHero()
       return
     }
     // Still climbing out of the bar: let it arrive, then shrink to the ball.
-    if (root.notchMoving && !root.notchClosing && root.notch < 0.98) {
+    if (root.notchMoving && !root.notchClosing && root.notch < root.phase.nearRest) {
       if (root.focused) root.compactAfterNotch = true
       root.releaseKeyboard()
       root.closeMenus()
@@ -869,26 +1114,105 @@ Item {
     root.focused = false
     root.opened = true
     if (root.departing) root.departing = false
-    if (root.travel > 0.02) {
-      travelAnim.to = 0
-      travelAnim.restart()
-    }
     if (alfred) {
       alfred.hudOpen = true
       alfred.hudFocused = false
+      alfred.trayAway = true
     }
-    dockAnim.to = 0
-    dockAnim.restart()
+    root.returnBall()
+  }
+
+  // Focus lost: the pill fades out in place and the face flies back to the ball.
+  // The column moves to the ball only when the fade is done and the face has landed.
+  function returnBall() {
+    dockAnim.stop()
+    pillFadeAnim.to = 0
+    pillFadeAnim.restart()
+    if (root.dock < 0.001) {
+      ballFlyAnim.stop()
+      pillFadeAnim.stop()
+      root.dock = 0
+      root.pillFade = 0
+      root.settleBall()
+      return
+    }
+    ballFlyAnim.to = 0
+    ballFlyAnim.restart()
+  }
+
+  // The face is home: the column takes the ball's place, the face lands with a
+  // plop and the ball body eases in.
+  function settleBall() {
+    if (!root.opened || root.focused) return
+    root.ballHome = true
+    root.ballAppear = 0
+    ballAppearAnim.restart()
+    heroPlop.restart()
+  }
+
+  // Entry point for the ball and the bar: the avatar reacts, the chat's outcome
+  // is acknowledged, and the pill opens.
+  function pokeAndOpen() {
+    if (alfred && typeof alfred.acknowledgeOutcome === "function") alfred.acknowledgeOutcome(root.activeChatId)
+    if (!root.focused) {
+      heroPlop.restart()
+      Bloub.react(root.profileKey, "poke", Date.now())
+    }
+    root.focusHud()
+  }
+
+  // Keeps the compact ball fully on screen. The column is centred, so x is
+  // bounded by the free space on either side; y by the bar and the bottom edge.
+  function clampBallOffset(x, y) {
+    var W = escScope.width
+    var H = escScope.height
+    if (!(W > 2) || !(H > 2)) return Qt.point(x, y)
+    var maxX = Math.max(0, (W - hudColumn.width) / 2)
+    var minY = -root.hudTopY
+    var maxY = Math.max(minY, H - root.pillHeight - root.hudTopY)
+    return Qt.point(Math.max(-maxX, Math.min(maxX, x)), Math.max(minY, Math.min(maxY, y)))
+  }
+
+  function loadBallOffset() {
+    var o = root.ballOffsets[root.ballScreen]
+    var p = o ? root.clampBallOffset(Number(o.x) || 0, Number(o.y) || 0) : Qt.point(0, 0)
+    root.ballOffsetX = p.x
+    root.ballOffsetY = p.y
+  }
+
+  function applyBallFile(content) {
+    var parsed = null
+    try {
+      parsed = JSON.parse(String(content || ""))
+    } catch (e) {
+      return
+    }
+    if (!parsed || !parsed.screens || typeof parsed.screens !== "object") return
+    root.ballOffsets = parsed.screens
+    root.loadBallOffset()
+  }
+
+  function saveBallOffset() {
+    if (root.ballScreen === "") return
+    var next = Object.assign({}, root.ballOffsets)
+    next[root.ballScreen] = { x: Math.round(root.ballOffsetX), y: Math.round(root.ballOffsetY) }
+    root.ballOffsets = next
+    ballFile.setText(JSON.stringify({ screens: next }, null, 2) + "\n")
   }
 
   function focusHud() {
     var fromTray = !root.opened
-    var fromBar = fromTray || root.notchClosing || (root.notchMoving && root.notch < 0.98)
+    var fromBar = fromTray || root.notchClosing || (root.notchMoving && root.notch < root.phase.nearRest)
     if (fromTray) root.pinHudScreen()
+    // The column goes back to the top centre; the pill is still invisible here.
+    root.ballHome = false
+    ballAppearAnim.stop()
+    root.ballAppear = 1
     plateFade.stop()
     heroFade.stop()
     if (root.heroOpacity < 1) root.heroOpacity = 1
     root.plateOpacity = 1
+    root.closeFading = false
     root.departing = false
     root.compactAfterNotch = false
     root.opened = true
@@ -897,28 +1221,26 @@ Item {
     if (alfred) {
       alfred.hudOpen = true
       alfred.hudFocused = true
+      alfred.trayAway = true
     }
     if (fromBar) {
+      pillFadeAnim.stop()
+      root.pillFade = 1
+      ballFlyAnim.stop()
       root.notchHold = false
       root.notchDocked = false
-      travelAnim.stop()
       if (fromTray) {
         root.dock = 0
-        root.travel = 0
         root.notch = 0
       }
       root.syncNotchFrame()
       root.runNotch(false)
-    } else if (root.travel > 0.02) {
-      travelAnim.to = 0
-      travelAnim.restart()
-      if (root.dock < 0.98) {
-        dockAnim.to = 1
-        dockAnim.restart()
-      }
     } else {
-      dockAnim.to = 1
-      dockAnim.restart()
+      // From the ball: the pill fades in place while the face flies to its row.
+      pillFadeAnim.to = 1
+      pillFadeAnim.restart()
+      ballFlyAnim.to = 1
+      ballFlyAnim.restart()
     }
     focusPrimeTimer.restart()
     grabFocusTimer.tries = 0
@@ -1526,14 +1848,36 @@ Item {
     easing.bezierCurve: [0.65, 0, 0.35, 1, 1, 1]
   }
 
+  // The face's travel between the ball (0) and the pill row (1). Its curve gives
+  // a soft start and a soft landing; placeHero draws the arc from it.
   NumberAnimation {
-    id: travelAnim
+    id: ballFlyAnim
     target: root
-    property: "travel"
-    duration: 420
+    property: "dock"
+    duration: root.phase.flyDuration
     easing.type: Easing.BezierSpline
-    easing.bezierCurve: [0.65, 0, 0.35, 1, 1, 1]
-    onFinished: if (root.departing && root.travel > 0.98) root.finishDepart()
+    easing.bezierCurve: root.phase.flyCurve
+    onFinished: {
+      if (ballFlyAnim.to === 0) root.settleBall()
+    }
+  }
+
+  // The pill fades in and out where it is; it never travels with the face.
+  NumberAnimation {
+    id: pillFadeAnim
+    target: root
+    property: "pillFade"
+    duration: root.phase.pillFadeMs
+    easing.type: Easing.OutCubic
+  }
+
+  NumberAnimation {
+    id: ballAppearAnim
+    target: root
+    property: "ballAppear"
+    to: 1
+    duration: root.phase.ballAppearMs
+    easing.type: Easing.OutCubic
   }
 
   // Slow off the bar, smooth through the middle, soft landing.
@@ -1547,7 +1891,7 @@ Item {
     easing.bezierCurve: [0.4, 0.0, 0.2, 1.0, 1.0, 1.0]
     onFinished: {
       if (!root.notchArm || root.notchClosing) return
-      if (root.notch < 0.96) return
+      if (root.notch < root.phase.settle) return
       root.finishNotch(false)
     }
   }
@@ -1562,7 +1906,7 @@ Item {
     easing.bezierCurve: [0.45, 0.0, 0.2, 1.0, 1.0, 1.0]
     onFinished: {
       if (!root.notchArm || !root.notchClosing) return
-      if (root.notch > 0.04) return
+      if (root.notch > root.phase.landed) return
       root.finishNotch(true)
     }
   }
@@ -1575,18 +1919,28 @@ Item {
     easing.type: Easing.OutCubic
     onFinished: {
       if (root.heroOpacity > 0.05) return
-      plateFade.stop()
-      root.plateOpacity = 1
-      root.notchMoving = false
-      root.notchHold = false
-      root.notchClosing = false
-      root.notch = 1
-      root.notchShown = 1
-      root.opened = false
-      root.hudScreenName = ""
-      root.travel = 0
-      root.dock = 0
-      root.heroOpacity = 1
+      // The chin is still landing; finishNotch(true) completes the reset.
+      if (root.notchClosing) return
+      root.finishHudClose()
+    }
+  }
+
+  // Landing squash on the hero: a quick press, then a soft release with no overshoot.
+  SequentialAnimation {
+    id: heroPlop
+    NumberAnimation {
+      target: heroBlob
+      property: "plop"
+      to: 1
+      duration: root.phase.plopUp
+      easing.type: Easing.OutCubic
+    }
+    NumberAnimation {
+      target: heroBlob
+      property: "plop"
+      to: 0
+      duration: root.phase.plopDown
+      easing.type: Easing.OutQuad
     }
   }
 
@@ -1607,8 +1961,21 @@ Item {
     onTriggered: {
       if (root.notchMoving) root.syncNotchFrame()
       root.placeHero()
+      root.updateHeroMotion()
+      heroBlob.flightTarget = root.flightDirection()
     }
   }
+
+  FileView {
+    id: ballFile
+    path: (Quickshell.env("HOME") || "") + "/.config/Hermes/alfred-ball.json"
+    watchChanges: false
+    atomicWrites: true
+    printErrors: false
+    onLoaded: root.applyBallFile(text())
+  }
+
+  onBallScreenChanged: root.loadBallOffset()
 
   FileView {
     id: trayWatch
@@ -1627,6 +1994,7 @@ Item {
       return
     }
     if (!parsed) return
+    if (parsed.screens && typeof parsed.screens === "object") root.trayRects = parsed.screens
     root.noteTray(Number(parsed.x), Number(parsed.y), Number(parsed.s))
   }
 
@@ -1661,9 +2029,15 @@ Item {
 
   Connections {
     target: root.alfred
-    function onFocusRequested() { root.focusHud() }
+    function onFocusRequested() { root.pokeAndOpen() }
     function onCompactRequested() { root.unfocusHud() }
     function onHideRequested() { root.hideHud() }
+    function onToolStarted() { Bloub.react(root.profileKey, "tool", Date.now()) }
+    function onToolFailed() { Bloub.react(root.profileKey, "toolError", Date.now()) }
+    function onUserTyped() { Bloub.react(root.profileKey, "typed", Date.now()) }
+    function onAssistantAsked() { Bloub.react(root.profileKey, "question", Date.now()) }
+    function onAssistantLaughed() { Bloub.react(root.profileKey, "laugh", Date.now()) }
+    function onUserThanked() { Bloub.react(root.profileKey, "love", Date.now()) }
     function onMenuRequested(kind) {
       var name = String(kind || "settings")
       root.focusHud()
@@ -1996,11 +2370,13 @@ Item {
       id: hero
       z: 8
       visible: root.opened && root.heroOpacity > 0.01
-      opacity: root.heroOpacity
+      opacity: root.heroOpacity * (1 - root.phase.ballAppearDim * (1 - root.ballAppear))
+      scale: 1 - root.phase.ballAppearDip * (1 - root.ballAppear)
       width: root.ballFace
       height: root.ballFace
 
       ProfileBlob {
+        id: heroBlob
         anchors.fill: parent
         visible: hero.visible
         themeSheet: root.surface
@@ -2013,7 +2389,16 @@ Item {
         phase: root.profilePhase
         eyes: root.profileEyes
         mood: root.mood
-        flow: root.focused && !root.departing && (!root.notchMoving || root.notchShown > 0.9) ? "open" : "compact"
+        flow: root.focused && !root.departing && (!root.notchMoving || root.notchShown > root.phase.contentShow) ? "open" : "compact"
+        flight: root.flightPhase
+        cursorX: root.alfred ? root.alfred.cursorX : NaN
+        cursorY: root.alfred ? root.alfred.cursorY : NaN
+        cursorAt: root.alfred ? root.alfred.cursorAt : 0
+        // Only the hero looks while the HUD is open; the bar icon and chips do not.
+        lookEnabled: root.opened
+        stretch: root.heroStretch
+        stretchAngle: root.heroStretchAngle
+        plopDepth: root.phase.plopDepth
         selected: false
       }
     }
@@ -2030,7 +2415,7 @@ Item {
       height: Math.max(1, root.notchFh)
       radius: root.notchFr
       color: root.surface
-      border.width: root.notch > 0.5 ? 1 : 0
+      border.width: root.notch > root.phase.rimShow ? 1 : 0
       border.color: root.rim
     }
 
@@ -2043,9 +2428,10 @@ Item {
       opacity: root.notchMoving ? root.notchShown : 1
       width: root.listening && !root.focused ? Math.max(root.pillWidth, voiceOkRow.implicitWidth) : root.pillWidth
       spacing: 0
-      anchors.horizontalCenter: parent.horizontalCenter
-      anchors.top: parent.top
-      anchors.topMargin: Style.bar.sizeHorizontal + Style.gapsOut + root.px(12)
+      // Centred at the top for the pill. It moves to the ball only when ballHome
+      // is set, with no easing: the face does the travelling, not the column.
+      x: (parent.width - width) / 2 + root.ballShiftX
+      y: root.hudTopY + root.ballShiftY
       z: 2
 
       Behavior on width {
@@ -2070,9 +2456,18 @@ Item {
         property bool ringShown: false
         property real ringOpacity: 0
         property bool ringReady: false
-        readonly property bool ringRunning: !root.compact && (root.listening || (root.mood === "busy" && !root.awaitingPermission))
+        readonly property bool ringRunning: !root.compact && (root.listening || (root.working && !root.awaitingPermission))
 
         width: root.pillWidth
+        // Same 340 ms ease as the column that holds it, so the mask and the
+        // visible pill keep the same width while it grows or folds.
+        Behavior on width {
+          NumberAnimation {
+            duration: 340
+            easing.type: Easing.BezierSpline
+            easing.bezierCurve: [0.23, 1, 0.32, 1, 1, 1]
+          }
+        }
         anchors.horizontalCenter: parent.horizontalCenter
         height: motionReady ? shownHeight : targetHeight
         onTargetHeightChanged: {
@@ -2104,6 +2499,9 @@ Item {
           }
         }
 
+        // Fades and grows in place: the pill never travels with the face.
+        opacity: root.pillFade
+        scale: root.phase.pillScaleFrom + (1 - root.phase.pillScaleFrom) * root.pillFade
         radius: root.compact ? height / 2 : root.px(Theme.arcRadiusPx())
         color: (root.compact || root.notchMoving) ? "transparent" : root.surface
 
@@ -2145,17 +2543,52 @@ Item {
         }
 
         MouseArea {
+          id: ballHit
           anchors.fill: parent
           z: 10
-          enabled: root.compact && !root.notchMoving
-          hoverEnabled: !root.listening
+          enabled: root.compact && !root.notchMoving && root.ballHome
+          hoverEnabled: true
           cursorShape: Qt.PointingHandCursor
-          onEntered: {
-            if (!root.listening) root.focusHud()
+          // Press and move past 6 px drags the ball; the release is not a click.
+          property real pressX: 0
+          property real pressY: 0
+          property real pressOffX: 0
+          property real pressOffY: 0
+          property bool dragMoved: false
+          onPressed: function(mouse) {
+            var p = mapToItem(escScope, mouse.x, mouse.y)
+            ballHit.pressX = p.x
+            ballHit.pressY = p.y
+            ballHit.pressOffX = root.ballOffsetX
+            ballHit.pressOffY = root.ballOffsetY
+            ballHit.dragMoved = false
+          }
+          onPositionChanged: function(mouse) {
+            if (!ballHit.pressed) return
+            var p = mapToItem(escScope, mouse.x, mouse.y)
+            var dx = p.x - ballHit.pressX
+            var dy = p.y - ballHit.pressY
+            if (!ballHit.dragMoved) {
+              if (Math.hypot(dx, dy) <= 6) return
+              ballHit.dragMoved = true
+              root.ballDragging = true
+            }
+            var c = root.clampBallOffset(ballHit.pressOffX + dx, ballHit.pressOffY + dy)
+            root.ballOffsetX = c.x
+            root.ballOffsetY = c.y
+          }
+          onReleased: {
+            if (!ballHit.dragMoved) return
+            root.ballDragging = false
+            root.saveBallOffset()
           }
           onClicked: {
+            if (ballHit.dragMoved) {
+              ballHit.dragMoved = false
+              return
+            }
             if (root.listening) root.stopListen()
-            else root.focusHud()
+            else root.pokeAndOpen()
           }
         }
 
@@ -2226,6 +2659,7 @@ Item {
                 readOnly: root.busy
                 enabled: root.focused && !root.busy
                 onTextChanged: root.syncSlash()
+                onTextEdited: { if (root.alfred && root.alfred.noteTyped) root.alfred.noteTyped() }
                 Keys.onPressed: function(event) {
                   if (root.handleCapture(event) || root.handleShortcut(event)) {
                     event.accepted = true
@@ -2308,6 +2742,9 @@ Item {
                       visible: !profileChip.current
                       agentId: String(profileChip.modelData.key || profileChip.modelData.id || "")
                       slot: "chip"
+                      cursorX: root.alfred ? root.alfred.cursorX : NaN
+                      cursorY: root.alfred ? root.alfred.cursorY : NaN
+                      cursorAt: root.alfred ? root.alfred.cursorAt : 0
                       shape: String(profileChip.modelData.shape || "cercle")
                       fill: String(profileChip.modelData.fill || "#0a0a0c")
                       expression: String(profileChip.modelData.expression || "")
@@ -2597,7 +3034,7 @@ Item {
                 readonly property bool current: String(modelData.id) === root.activeChatId
                 readonly property string chipState: modelData.busy === true
                   ? (modelData.awaitingPermission === true ? "permission" : "busy")
-                  : (String(modelData.lastOutcome || "") === "error" ? "error" : (String(modelData.lastOutcome || "") === "success" ? "success" : "idle"))
+                  : (modelData.outcomeSeen === true ? "idle" : (String(modelData.lastOutcome || "") === "error" ? "error" : (String(modelData.lastOutcome || "") === "success" ? "success" : "idle")))
                 height: chatRow.height
                 width: chipInner.implicitWidth + root.px(18)
                 radius: height / 2

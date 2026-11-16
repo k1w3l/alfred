@@ -10,7 +10,8 @@ npx --yes esbuild bloubs/bridge.ts \
   --charset=utf8 \
   --legal-comments=none \
   --banner:js='.pragma library' \
-  --footer:js='function tick(id, nowMs, shapeId, expressionId, mood, idleVariant, phase, fill, eyes, flow) { return Bloub.tick(id, nowMs, shapeId, expressionId, mood, idleVariant, phase, fill, eyes, flow) }
+  --footer:js='function tick(id, nowMs, shapeId, expressionId, mood, idleVariant, phase, fill, eyes, flow, flight, flightX, flightY, lookX, lookY, lookActive, size) { return Bloub.tick(id, nowMs, shapeId, expressionId, mood, idleVariant, phase, fill, eyes, flow, flight, flightX, flightY, lookX, lookY, lookActive, size) }
 function play(agentKey, sequence, nowMs, phase) { return Bloub.play(agentKey, sequence, nowMs, phase) }
+function react(agentKey, kind, nowMs) { return Bloub.react(agentKey, kind, nowMs) }
 function release(id) { return Bloub.release(id) }' \
   --outfile=BloubEngine.js
