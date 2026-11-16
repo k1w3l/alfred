@@ -2,11 +2,11 @@
 // Each agent owns a BotEngine. sample() stays a pure function of time;
 // this file is only the clock and the cycle table.
 
-import { BotEngine, type Look } from '../../misc/bloub/src/bot/engine'
-import { blockAt } from '../../misc/bloub/src/bot/cycles'
-import { EXPRESSION_BY_ID } from '../../misc/bloub/src/bot/expressions'
-import { SHAPE_BY_ID } from '../../misc/bloub/src/bot/skins'
-import { STATE_BY_ID, type StateId } from '../../misc/bloub/src/bot/states'
+import { BotEngine, type Look } from './engine/src/bot/engine'
+import { blockAt } from './engine/src/bot/cycles'
+import { EXPRESSION_BY_ID } from './engine/src/bot/expressions'
+import { SHAPE_BY_ID } from './engine/src/bot/skins'
+import { STATE_BY_ID, type StateId } from './engine/src/bot/states'
 
 type Block = { state: StateId; duration: number }
 

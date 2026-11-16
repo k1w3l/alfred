@@ -45,7 +45,7 @@ var Bloub = (() => {
     tick: () => tick
   });
 
-  // ../misc/bloub/src/bot/math.ts
+  // bloubs/engine/src/bot/math.ts
   var TAU = Math.PI * 2;
   var clamp = (v, lo = 0, hi = 1) => v < lo ? lo : v > hi ? hi : v;
   var lerp = (a, b, t) => a + (b - a) * t;
@@ -69,7 +69,7 @@ var Bloub = (() => {
   }
   var r2 = (v) => Math.round(v * 100) / 100;
 
-  // ../misc/bloub/src/bot/decor.ts
+  // bloubs/engine/src/bot/decor.ts
   function wheel(hue, s = 0.55, l = 0.62) {
     const h = (hue % 360 + 360) % 360;
     const c = (1 - Math.abs(2 * l - 1)) * s;
@@ -200,7 +200,7 @@ var Bloub = (() => {
   var NOTIF_POP = 1.14;
   var NOTIF_MARGIN = 0.054;
 
-  // ../misc/bloub/src/bot/face.ts
+  // bloubs/engine/src/bot/face.ts
   var EYE_SPLIT = 15.46;
   var EYE_W = 0.186;
   var EYE_H = 0.412;
@@ -281,7 +281,7 @@ var Bloub = (() => {
     return 0.06 + 0.94 * clamp(lid);
   }
 
-  // ../misc/bloub/src/bot/expressions.ts
+  // bloubs/engine/src/bot/expressions.ts
   var eye = (w, h, tilt = 0, open = 1) => ({ w, h, tilt, open });
   var pair = (w, h, tilt = 0, open = 1) => [
     eye(w, h, tilt, open),
@@ -420,7 +420,7 @@ var Bloub = (() => {
     };
   }
 
-  // ../misc/bloub/src/bot/profiles.ts
+  // bloubs/engine/src/bot/profiles.ts
   var PROFILE_SAMPLES = 64;
   var PROFILES = {
     // oeuf : meme hauteur que la boule, retreci en largeur
@@ -434,7 +434,7 @@ var Bloub = (() => {
     triangle: [0.7819, 0.8211, 0.8747, 0.944, 1.0223, 1.096, 1.1401, 1.134, 1.0808, 1.0047, 0.9265, 0.8603, 0.8104, 0.773, 0.745, 0.7273, 0.7151, 0.7118, 0.7148, 0.7245, 0.7427, 0.768, 0.8037, 0.8518, 0.9148, 0.9876, 1.0583, 1.1073, 1.1109, 1.0667, 0.994, 0.9164, 0.8482, 0.7948, 0.7555, 0.7261, 0.7056, 0.6925, 0.6859, 0.6869, 0.6938, 0.7084, 0.7305, 0.7615, 0.804, 0.8595, 0.9311, 1.0092, 1.0791, 1.1171, 1.1054, 1.0501, 0.9779, 0.905, 0.845, 0.799, 0.7656, 0.7413, 0.7258, 0.716, 0.7146, 0.7204, 0.733, 0.7528]
   };
 
-  // ../misc/bloub/src/bot/shape.ts
+  // bloubs/engine/src/bot/shape.ts
   var ANGLES = Array.from({ length: PROFILE_SAMPLES }, (_, i) => i / PROFILE_SAMPLES * TAU);
   var COS = ANGLES.map(Math.cos);
   var SIN = ANGLES.map(Math.sin);
@@ -634,7 +634,7 @@ var Bloub = (() => {
     return `M${r2(-hw)} ${r2(-hh + r)}A${r2(r)} ${r2(r)} 0 0 1 ${r2(-hw + r)} ${r2(-hh)}L${r2(hw - r)} ${r2(-hh)}A${r2(r)} ${r2(r)} 0 0 1 ${r2(hw)} ${r2(-hh + r)}L${r2(hw)} ${r2(hh - r)}A${r2(r)} ${r2(r)} 0 0 1 ${r2(hw - r)} ${r2(hh)}L${r2(-hw + r)} ${r2(hh)}A${r2(r)} ${r2(r)} 0 0 1 ${r2(-hw)} ${r2(hh - r)}Z`;
   }
 
-  // ../misc/bloub/src/bot/skins.ts
+  // bloubs/engine/src/bot/skins.ts
   function normalize(radii, max = 1) {
     const peak = Math.max(...radii);
     if (peak <= 0) return radii;
@@ -692,7 +692,7 @@ var Bloub = (() => {
   ];
   var COLOR_BY_ID = new Map(COLORS.map((c) => [c.id, c]));
 
-  // ../misc/bloub/src/bot/states.ts
+  // bloubs/engine/src/bot/states.ts
   var pair2 = (w, h) => [
     { w, h, open: 1 },
     { w, h, open: 1 }
@@ -1825,7 +1825,7 @@ var Bloub = (() => {
   ];
   var STATE_BY_ID = new Map(STATES.map((s) => [s.id, s]));
 
-  // ../misc/bloub/src/bot/eyefit.ts
+  // bloubs/engine/src/bot/eyefit.ts
   var R = 100;
   var DERIVE_YAW = 5.5 + 1.6;
   var DERIVE_PITCH = 4.2 + 1.3;
@@ -2043,7 +2043,7 @@ var Bloub = (() => {
     return (_b = (_a = par.get(clef(state, expr))) != null ? _a : par.get(clef(state, null))) != null ? _b : NUL;
   }
 
-  // ../misc/bloub/src/bot/engine.ts
+  // bloubs/engine/src/bot/engine.ts
   var NO_LOOK = { yaw: 0, pitch: 0, mix: 0, spin: 0, wander: 1 };
   var lerpLook = (a, b, t) => ({
     yaw: lerp(a.yaw, b.yaw, t),
@@ -2430,7 +2430,7 @@ var Bloub = (() => {
   __publicField(_BotEngine, "LOOK_MORPH", 0.24);
   var BotEngine = _BotEngine;
 
-  // ../misc/bloub/src/bot/cycles.ts
+  // bloubs/engine/src/bot/cycles.ts
   var MIN_BLOCK = Math.max(...STATES.map((s) => s.morph));
   function totalDuration(blocks) {
     return blocks.reduce((sum, b) => sum + b.duration, 0);
