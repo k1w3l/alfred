@@ -200,7 +200,27 @@ describe('etats', () => {
 
   it('tient les transitions d interface hors du catalogue', () => {
     const horsSequence = STATES.filter((s) => !SEQUENCE.includes(s.id)).map((s) => s.id)
-    expect(horsSequence).toEqual(['swirl'])
+    expect(horsSequence).toEqual([
+      'swirl',
+      'focus',
+      'nod',
+      'startle',
+      'curious',
+      'hop',
+      'relieved',
+      'down',
+      'drowsy',
+      'yawn',
+      'travel',
+      'ponder',
+      'wonder',
+      'oops',
+      'bored',
+      'sleepy',
+      'laugh',
+      'love',
+      'cheer'
+    ])
   })
 
   it('montre le visage sur les etats a visage, le cache sur les autres', () => {

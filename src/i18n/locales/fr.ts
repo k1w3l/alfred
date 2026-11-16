@@ -154,7 +154,25 @@ export default {
     orbit: 'Orbite',
     burst: 'Éclatement',
     comet: 'Comète',
-    swirl: 'Tourbillon'
+    swirl: 'Tourbillon',
+    focus: 'Concentration',
+    nod: 'Hochement',
+    startle: 'Sursaut',
+    curious: 'Curiosité',
+    hop: 'Sautillement',
+    relieved: 'Soulagement',
+    down: 'Abattement',
+    drowsy: 'Somnolence',
+    yawn: 'Bâillement',
+    travel: 'Voyage',
+    ponder: 'Rêverie',
+    wonder: 'Interrogation',
+    oops: 'Erreur',
+    bored: 'Ennui',
+    sleepy: 'Fatigue',
+    laugh: 'Rire',
+    love: 'Affection',
+    cheer: 'Réussite'
   },
 
   shapes: {

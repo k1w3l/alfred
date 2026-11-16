@@ -104,6 +104,7 @@ function blendPose(a: Pose, b: Pose, t: number): Pose {
     split: lerp(a.split, b.split, t),
     eyes: [lerpEye(a.eyes[0], b.eyes[0], t), lerpEye(a.eyes[1], b.eyes[1], t)],
     eyeAlpha: lerp(a.eyeAlpha, b.eyeAlpha, t),
+    eyeScale: lerp(a.eyeScale, b.eyeScale, t),
     bodyAlpha: lerp(a.bodyAlpha, b.bodyAlpha, t),
     dots: [
       ...a.dots.map((d) => ({ ...d, opacity: d.opacity * out })),
@@ -505,6 +506,8 @@ export class BotEngine {
         const e = poses[i]!
         if (e.depth <= 0.02) continue
         const cfg = pose.eyes[i]!
+        // l'echelle de l'etat rapetisse la gelule ET sa place sur la sphere
+        const eyeK = pose.eyeScale
         const fit = bodyRadius(e.x, e.y)
         // Inclinaison propre de l'oeil : on compose le repere tangent avec une
         // rotation dans le plan de l'oeil (Basis x Rot). C'est ce qui permet des
@@ -519,9 +522,11 @@ export class BotEngine {
         // Le clignement s'applique APRES tout ca : c'est un ecrasement vertical
         // a l'ecran, pas le long de l'axe de la gelule.
         const k = blinkScale(Math.min(lid, cfg.open))
+        const tx = e.x * fit * eyeK + (offX + decalage.x) * R
+        const ty = e.y * fit * eyeK + (offY + decalage.y) * R
         eyes.push({
-          d: capsulePath(cfg.w * R, cfg.h * R),
-          matrix: `matrix(${r2(ax)},${r2(ay * k)},${r2(cx2)},${r2(cy2 * k)},${r2(e.x * fit + (offX + decalage.x) * R)},${r2(e.y * fit + (offY + decalage.y) * R)})`,
+          d: capsulePath(cfg.w * R * eyeK, cfg.h * R * eyeK),
+          matrix: `matrix(${r2(ax)},${r2(ay * k)},${r2(cx2)},${r2(cy2 * k)},${r2(tx)},${r2(ty)})`,
           alpha: pose.eyeAlpha * clamp(e.depth / 0.12)
         })
       }

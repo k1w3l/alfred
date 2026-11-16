@@ -68,6 +68,8 @@ interface Visage {
   gaze: Pose['gaze']
   split: number
   eyes: Pose['eyes']
+  /** echelle des yeux de la pose, comme le moteur la lit */
+  eyeScale: number
 }
 
 /**
@@ -122,8 +124,10 @@ function empreintes(visage: Visage, sil: Pose['sil'], radii: number[]): Empreint
     const cx = -e.a * sp + e.c * cp
     const cy = -e.b * sp + e.d * cp
 
-    const hw = Math.max(cfg.w * R, 0.01) / 2
-    const hh = Math.max(cfg.h * R, 0.01) / 2
+    // meme echelle que le moteur : la gelule et sa place sur la sphere rapetissent ensemble
+    const k = visage.eyeScale
+    const hw = Math.max(cfg.w * R * k, 0.01) / 2
+    const hh = Math.max(cfg.h * R * k, 0.01) / 2
     const r = Math.min(hw, hh)
     // l'axe est celui de la plus grande dimension
     const long = hh > hw
@@ -131,8 +135,8 @@ function empreintes(visage: Visage, sil: Pose['sil'], radii: number[]): Empreint
     // le prorata du rayon local, exactement comme le fait le moteur
     const fit = radiusAtAngle(radii, Math.atan2(e.y, e.x) - sil.rot)
     out.push({
-      x: e.x * fit,
-      y: e.y * fit,
+      x: e.x * fit * k,
+      y: e.y * fit * k,
       ax: (long ? cx : ax) * demi,
       ay: (long ? cy : ay) * demi,
       r,
@@ -345,15 +349,26 @@ function resous(epreuves: Epreuve[]): { x: number; y: number } {
  * de re-resoudre le probleme sur un regard en cours d'interpolation.
  */
 function visageDe(def: StateDef, pose: Pose, expr: BotExpression | null): Visage {
-  if (def.baseFace && expr) return { gaze: expr.gaze, split: expr.split, eyes: expr.eyes }
-  return { gaze: pose.gaze, split: pose.split, eyes: pose.eyes }
+  if (def.baseFace && expr)
+    return { gaze: expr.gaze, split: expr.split, eyes: expr.eyes, eyeScale: pose.eyeScale }
+  return { gaze: pose.gaze, split: pose.split, eyes: pose.eyes, eyeScale: pose.eyeScale }
 }
 
 /** Les dates a echantillonner dans un etat : une seule si sa pose ne bouge pas. */
 function dates(def: StateDef): number[] {
   /** Tout ce dont le solveur se sert : si rien ne bouge, une date suffit. */
   const signature = (p: Pose) =>
-    JSON.stringify([p.gaze, p.split, p.eyes, p.sil.rot, p.sil.cx, p.sil.cy, p.sil.sx, p.sil.sy])
+    JSON.stringify([
+      p.gaze,
+      p.split,
+      p.eyes,
+      p.eyeScale,
+      p.sil.rot,
+      p.sil.cx,
+      p.sil.cy,
+      p.sil.sx,
+      p.sil.sy
+    ])
   if (signature(def.pose(0)) === signature(def.pose(def.duration))) return [0]
   const n = 3
   return Array.from({ length: n }, (_, i) => (i / (n - 1)) * def.duration)

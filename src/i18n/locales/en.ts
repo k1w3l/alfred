@@ -129,7 +129,25 @@ const en: typeof fr = {
     orbit: 'Orbit',
     burst: 'Burst',
     comet: 'Comet',
-    swirl: 'Swirl'
+    swirl: 'Swirl',
+    focus: 'Focus',
+    nod: 'Nod',
+    startle: 'Startle',
+    curious: 'Curious',
+    hop: 'Hop',
+    relieved: 'Relieved',
+    down: 'Down',
+    drowsy: 'Drowsy',
+    yawn: 'Yawn',
+    travel: 'Travel',
+    ponder: 'Pondering',
+    wonder: 'Wonder',
+    oops: 'Oops',
+    bored: 'Bored',
+    sleepy: 'Sleepy',
+    laugh: 'Laugh',
+    love: 'Love',
+    cheer: 'Cheer'
   },
 
   shapes: {

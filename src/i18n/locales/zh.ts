@@ -132,7 +132,25 @@ const zh: typeof fr = {
     orbit: '轨道',
     burst: '爆散',
     comet: '彗星',
-    swirl: '漩涡'
+    swirl: '漩涡',
+    focus: '专注',
+    nod: '点头',
+    startle: '惊吓',
+    curious: '好奇',
+    hop: '蹦跳',
+    relieved: '松了口气',
+    down: '沮丧',
+    drowsy: '困倦',
+    yawn: '打哈欠',
+    travel: '移动',
+    ponder: '沉思',
+    wonder: '疑惑',
+    oops: '出错',
+    bored: '无聊',
+    sleepy: '困意',
+    laugh: '大笑',
+    love: '喜爱',
+    cheer: '成功'
   },
 
   shapes: {
